@@ -145,6 +145,16 @@ class Hub:
                 self.by_pid[lid].pop(pid, None)
                 self.students[lid].discard(ws)
 
+    async def close_all_trainers(self):
+        """Ferme toutes les connexions moniteur (invalidation des jetons formateur)."""
+        for lid, sockets in list(self.trainers.items()):
+            for ws in list(sockets):
+                try:
+                    await ws.close(code=1008)
+                except Exception:
+                    pass
+                sockets.discard(ws)
+
 
 def install_live_api(app, cfg: Settings, store: LiveStore):
     auth=Auth(cfg,store)
@@ -161,9 +171,11 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return auth.login(payload, client_ip)
 
     @student_routes.post('/auth/change-password', tags=['Authentification'])
-    def change_password(payload: ChangePassword, request: Request):
+    async def change_password(payload: ChangePassword, request: Request):
         client_ip = request.client.host if request.client else 'unknown'
-        return auth.change_password(payload.old_password, payload.new_password, client_ip)
+        result = auth.change_password(payload.old_password, payload.new_password, client_ip)
+        await hub.close_all_trainers()  # invalide aussi les WS moniteur ouverts
+        return result
 
     @trainer_routes.post('/live/start', tags=['Live formateur'])
     def start(payload: Begin):
