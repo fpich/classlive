@@ -8,6 +8,7 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
@@ -64,6 +65,10 @@ class SlideContentRequest(BaseModel):
     content: str
 
 
+class DuplicateRequest(BaseModel):
+    new_title: str | None = Field(default=None, min_length=1, max_length=150)
+
+
 class GroupResult(BaseModel):
     success: bool = True
     group: str
@@ -88,6 +93,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     if not guide_path.exists():
         guide_path.write_text(files('classlive').joinpath('GUIDE_CLASSLIVE.md').read_text(encoding='utf-8'), encoding='utf-8')
     app = FastAPI(title="ClassLive Backend", version=__version__, description="Gestion des groupes et événements sur disque.")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=list(cfg.cors_origins),
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.middleware("http")
     async def log_requests(request, call_next):
@@ -163,6 +175,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def create_event(payload: EventRequest):
         result = storage.create_event(payload.group, payload.title)
         logger.info("Événement %s/%s (%s)", result["group"], result["title"], "créé" if result["created"] else "existant")
+        return {"success": True, **result}
+
+    @router.get("/events", tags=["Événements"])
+    def list_all_events():
+        events = [{"group": g, "title": e} for g in storage.list_groups() for e in (storage.list_events(g) or [])]
+        return {"events": events}
+
+    @router.post("/groups/{group}/events/{event}/duplicate", tags=["Événements"])
+    def duplicate_event(group: str, event: str, payload: DuplicateRequest | None = None):
+        result = storage.duplicate_event(group, event, payload.new_title if payload else None)
+        logger.info("Événement dupliqué : %s/%s -> %s", result["group"], result["title"], result["new_title"])
         return {"success": True, **result}
 
     @router.patch("/groups/{group}", tags=["Groupes"])

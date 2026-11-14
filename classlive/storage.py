@@ -314,6 +314,38 @@ class EventStorage:
                 self._advance_counter('event', number, parent)
             return {'group': parent.name, 'title': source.name, 'new_name': target.name, 'renamed': True, 'path': str(target)}
 
+    @staticmethod
+    def _check_no_symlinks(root: Path) -> None:
+        for dirpath, dirnames, filenames in os.walk(root):
+            for name in dirnames + filenames:
+                full = Path(dirpath) / name
+                if full.is_symlink():
+                    raise StorageError(f'Lien symbolique interdit : {full}')
+
+    def duplicate_event(self, group: str, title: str, new_title: str | None = None) -> dict:
+        """Copie un événement (slides et sous-dossiers) vers un nouvel identifiant Exxx."""
+        with self._lock:
+            parent = self._group(group)
+            source = self._event(parent, title)
+            identifier = self._reserve_id('event', parent)
+            base = normalize_name(new_title) if new_title is not None else EVENT_RE.fullmatch(source.name).group(2) + '_copie'
+            peers = self._items(parent, EVENT_RE)
+            normalized = base
+            suffix = 1
+            while any(p.name.split('_', 1)[1].casefold() == normalized.casefold() for p in peers):
+                suffix += 1
+                if suffix > 100:
+                    raise ResourceConflict('Impossible de trouver un nom de copie disponible.')
+                normalized = f'{base}_{suffix}'
+            target = parent / f'E{identifier:03d}_{normalized}'
+            self._check_no_symlinks(source)
+            try:
+                shutil.copytree(source, target, symlinks=False)
+            except OSError as exc:
+                raise StorageError(f'Impossible de dupliquer l’événement : {exc}') from exc
+            return {'group': parent.name, 'title': source.name, 'new_title': target.name,
+                    'duplicated': True, 'path': str(target)}
+
     def delete_event(self, group: str, title: str) -> dict:
         with self._lock:
             parent = self._group(group)

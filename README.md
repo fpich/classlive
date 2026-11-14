@@ -57,7 +57,7 @@ bash tests/run_suite_complete.sh
 
 Le script crée si besoin un environnement Python réservé aux tests (`.venv-tests`), lance les **tests pytest**, le **parcours complet curl sur un serveur éphémère**, puis **30 étudiants simultanés** sur de véritables WebSockets avec réponses concurrentes, redémarrage du service isolé pendant un Live, export CSV et réinitialisation. Aucun test de cette commande ne modifie le daemon installé sur `:8080`, le fichier `/etc/classlive/config.yml` ni le workspace de production.
 
-Le rapport local est `tests/rapports/derniere_execution.log` ; le détail du périmètre est dans [`tests/MATRICE_COUVERTURE.md`](tests/MATRICE_COUVERTURE.md). Chaque nouvel endpoint doit être ajouté à l'inventaire des 42 opérations OpenAPI dans `tests/test_contrat_exhaustif.py`. Les tests ne garantissent pas l'absence de tout défaut et ne remplacent pas une campagne d'exploitation longue durée.
+Le rapport local est `tests/rapports/derniere_execution.log` ; le détail du périmètre est dans [`tests/MATRICE_COUVERTURE.md`](tests/MATRICE_COUVERTURE.md). Chaque nouvel endpoint doit être ajouté à l'inventaire des 47 opérations OpenAPI dans `tests/test_contrat_exhaustif.py`. Les tests ne garantissent pas l'absence de tout défaut et ne remplacent pas une campagne d'exploitation longue durée.
 
 Pour exécuter seulement les tests Python : `pytest -q` (avec les dépendances de test).
 
@@ -151,7 +151,12 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `POST` | `/live/{live_id}/stop` | Terminer ; résultats conservés |
 | `GET` | `/live/{live_id}/students` | Étudiants, `connected`, `disconnected`, activité |
 | `GET` | `/live/{live_id}/results` | Réponses brutes enregistrées, sans notation |
-| `GET` | `/live/{live_id}/stats` | Agrégats sans identité pour la slide courante (QCM : décompte par option) |
+| `GET` | `/live/{live_id}/stats` | Agrégats sans identité pour la slide courante (QCM : décompte par option) ; `?all=1` pour toutes les slides |
+| `GET` | `/live/active` | Liste des Lives en cours (pour retrouver la session après un refresh) |
+| `DELETE` | `/live/{live_id}/students/{participation_id}` | Retirer un participant (ses réponses sont supprimées) |
+| `GET` | `/events` | Liste globale de tous les événements de tous les groupes |
+| `POST` | `/groups/{group}/events/{event}/duplicate` | Dupliquer un événement avec toutes ses slides (`new_title` optionnel) |
+| `POST` | `/auth/change-password` | Changer le mot de passe formateur en mémoire (effectif jusqu'au redémarrage ; invalide tous les jetons) |
 | `GET` | `/live/{live_id}/export.csv` | CSV de la session |
 | `GET` | `/groups/{group}/events/{event}/sessions` | Sessions actives et terminées |
 | `GET` | `/groups/{group}/events/{event}/export.csv` | CSV cumulé des sessions |
@@ -215,6 +220,16 @@ Les noms/prénoms/réponses sont des données personnelles : informer les étudi
 - Le guide complet est copié au premier lancement dans `<workdir>/GUIDE_CLASSLIVE.md` et accessible en Markdown via `GET /api/v1/help` ; il n'est pas écrasé lors des mises à jour.
 - Migration SQLite automatique des anciennes bases v0.7.0 (sauvegarder `classlive.db` avant mise à jour recommandée).
 
+
+## Préparation frontend (v0.8.4 révision 3)
+
+- **CORS** : middleware actif, origines configurables via `classlive.security.cors_origins` (`["*"]` par défaut, LAN uniquement). Un front Vite/React sur un autre port peut appeler l'API directement.
+- **`/live/active`** : retrouver le Live en cours après un refresh navigateur.
+- **Kick d'un participant** : `DELETE /live/{id}/students/{pid}`, notifié par WebSocket (`student_kicked`), sa connexion WS est fermée au prochain ping.
+- **Duplication d'événement** : `POST .../duplicate` copie slides et sous-dossiers vers un nouvel `Exxx` (nom `_copie` auto-incrémenté en cas de conflit).
+- **Stats complètes** : `GET /live/{id}/stats?all=1` retourne les agrégats de toutes les slides (récap de fin de session).
+- **Liste globale** : `GET /api/v1/events` pour la page d'accueil.
+- **Change-password** : `POST /auth/change-password` (mémoire, min 8 caractères, rate limité, invalide les jetons actifs). Au redémarrage, retombe sur `CLASSLIVE_TRAINER_PASSWORD`.
 
 ## Alignement Wooclap et simplifications (v0.8.4 révision 2)
 

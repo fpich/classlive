@@ -41,6 +41,11 @@ class Submit(BaseModel):
     answer: dict[str, Any]
 
 
+class ChangePassword(BaseModel):
+    old_password: str
+    new_password: str = Field(min_length=8, max_length=200)
+
+
 class Auth:
     _LOGIN_WINDOW = 60          # fenêtre de rate limiting (secondes)
     _LOGIN_MAX = 5              # tentatives max par fenêtre et par IP
@@ -50,6 +55,7 @@ class Auth:
         self.store = store
         self.trainers: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
+        self._password = cfg.trainer_password
 
     def _check_rate_limit(self, client_ip: str):
         now = time.monotonic()
@@ -61,14 +67,27 @@ class Auth:
 
     def login(self, payload: Login, client_ip: str = 'unknown'):
         self._check_rate_limit(client_ip)
-        if not self.cfg.trainer_password:
+        if not self._password:
             raise HTTPException(status_code=503,detail='Configurer CLASSLIVE_TRAINER_PASSWORD avant de se connecter.')
         if (not hmac.compare_digest(payload.username,self.cfg.trainer_username)
-                or not hmac.compare_digest(payload.password,self.cfg.trainer_password)):
+                or not hmac.compare_digest(payload.password,self._password)):
             raise HTTPException(status_code=401,detail='Identifiants invalides.')
         token=secrets.token_urlsafe(32)
         self.trainers[token]=time.monotonic()+8*3600
         return {'access_token':token,'token_type':'bearer','expires_in':28800,'role':'trainer'}
+
+    def change_password(self, old: str, new: str, client_ip: str = 'unknown'):
+        """Change le mot de passe en mémoire (effectif jusqu'au redémarrage) et invalide tous les jetons."""
+        self._check_rate_limit(client_ip)
+        if not self._password:
+            raise HTTPException(status_code=503,detail='Aucun mot de passe formateur configuré.')
+        if not hmac.compare_digest(old,self._password):
+            raise HTTPException(status_code=401,detail='Ancien mot de passe invalide.')
+        if len(new) < 8:
+            raise HTTPException(status_code=422,detail='Le nouveau mot de passe doit faire au moins 8 caractères.')
+        self._password=new
+        self.trainers.clear()
+        return {'changed':True}
 
     def valid_trainer(self, token: str) -> bool:
         expiry=self.trainers.get(token,0)
@@ -124,6 +143,11 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         client_ip = request.client.host if request.client else 'unknown'
         return auth.login(payload, client_ip)
 
+    @student_routes.post('/auth/change-password', tags=['Authentification'])
+    def change_password(payload: ChangePassword, request: Request):
+        client_ip = request.client.host if request.client else 'unknown'
+        return auth.change_password(payload.old_password, payload.new_password, client_ip)
+
     @trainer_routes.post('/live/start', tags=['Live formateur'])
     def start(payload: Begin):
         return store.start(payload.group,payload.title)
@@ -177,8 +201,18 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return store.results(live_id)
 
     @trainer_routes.get('/live/{live_id}/stats',tags=['Résultats'])
-    def live_stats(live_id: str):
-        return store.stats(live_id)
+    def live_stats(live_id: str, all: bool = False):
+        return store.stats(live_id, all_slides=all)
+
+    @trainer_routes.get('/live/active',tags=['Live formateur'])
+    def active_lives():
+        return store.active()
+
+    @trainer_routes.delete('/live/{live_id}/students/{participation_id}',tags=['Live formateur'])
+    async def kick_student(live_id: str, participation_id: str):
+        result=store.kick(live_id,participation_id)
+        await hub.publish(live_id,{'event':'student_kicked','participation_id':participation_id})
+        return result
 
     @trainer_routes.get('/live/{live_id}/export.csv',tags=['Résultats'])
     def export_live(live_id: str):
@@ -265,7 +299,7 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
             while True:
                 data=await ws.receive_json()
                 if isinstance(data,dict) and data.get('event')=='ping':
-                    if store.state(lid)['status'] != 'running':
+                    if store.state(lid)['status'] != 'running' or not store.participation_exists(pid):
                         await ws.close(code=1008)
                         break
                     store.ping(lid,pid)

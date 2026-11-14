@@ -12,3 +12,6 @@ classlive:
     # Mot de passe dans CLASSLIVE_TRAINER_PASSWORD (fichier systemd .env)
     # Option de compatibilité : X-API-Key donne les droits formateur si renseigné.
     api_key: null
+    # Origines autorisées en CORS pour un frontend séparé (Vite/React).
+    # "*" = tout le LAN (HTTP non chiffré, réservé au réseau de confiance).
+    cors_origins: ["*"]

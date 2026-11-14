@@ -314,32 +314,68 @@ class LiveStore:
                 'status':live['status'],'started_at':live['started_at'],
                 'ended_at':live['ended_at'],'results':data}
 
-    def stats(self, lid):
-        """Agrégats sans identité : décompte des réponses pour la slide courante.
+    def stats(self, lid, all_slides: bool = False):
+        """Agrégats sans identité : décompte des réponses.
 
-        Pour un QCM (selected), chaque option est décomptée. Pour les autres
-        types d'exercice, seul le nombre de réponses est retourné.
+        Par défaut, slide courante uniquement. Avec all_slides=True, toutes
+        les slides de la session. Pour un QCM (selected), chaque option est
+        décomptée ; pour les autres types, seul le nombre de réponses.
         """
         with self.db() as con:
             live = self._live(con, lid)
-            snap = con.execute('SELECT number,filename,kind FROM snapshots WHERE live_id=? AND number=?',
-                               (lid, live['current_number'])).fetchone()
             total_students = con.execute('SELECT COUNT(*) AS n FROM participations WHERE live_id=?',
                                          (lid,)).fetchone()['n']
-            rows = con.execute(
-                'SELECT s.answer_json FROM submissions s JOIN participations p ON p.id=s.participation_id '
-                'WHERE p.live_id=? AND s.slide_number=?', (lid, live['current_number'])).fetchall()
-        result = {'live_id': lid, 'slide': snap['filename'], 'slide_type': snap['kind'],
-                  'answered': len(rows), 'total_students': total_students}
-        if snap['kind'] == 'Q':
-            options: dict[str, int] = {}
-            for row in rows:
-                answer = json.loads(row['answer_json'])
-                if isinstance(answer, dict):
-                    for opt in answer.get('selected', []):
-                        options[opt] = options.get(opt, 0) + 1
-            result['options'] = options
+            snapshots = con.execute('SELECT number,filename,kind FROM snapshots WHERE live_id=? ORDER BY number',
+                                    (lid,)).fetchall()
+            if not all_slides:
+                snapshots = [s for s in snapshots if s['number'] == live['current_number']]
+            slides_stats = []
+            for snap in snapshots:
+                rows = con.execute(
+                    'SELECT s.answer_json FROM submissions s JOIN participations p ON p.id=s.participation_id '
+                    'WHERE p.live_id=? AND s.slide_number=?', (lid, snap['number'])).fetchall()
+                entry = {'number': snap['number'], 'slide': snap['filename'], 'slide_type': snap['kind'],
+                         'answered': len(rows), 'total_students': total_students}
+                if snap['kind'] == 'Q':
+                    options: dict[str, int] = {}
+                    for row in rows:
+                        answer = json.loads(row['answer_json'])
+                        if isinstance(answer, dict):
+                            for opt in answer.get('selected', []):
+                                options[opt] = options.get(opt, 0) + 1
+                    entry['options'] = options
+                slides_stats.append(entry)
+        if all_slides:
+            return {'live_id': lid, 'slides': slides_stats}
+        s = slides_stats[0]
+        result = {'live_id': lid, 'slide': s['slide'], 'slide_type': s['slide_type'],
+                  'answered': s['answered'], 'total_students': s['total_students']}
+        if 'options' in s:
+            result['options'] = s['options']
         return result
+
+    def active(self):
+        """Tous les Lives en cours (un par événement au plus)."""
+        with self.db() as con:
+            rows = con.execute(
+                "SELECT id,code,group_name,event_name,started_at,current_number "
+                "FROM live_sessions WHERE status='running' ORDER BY started_at").fetchall()
+        return {'lives': [dict(r) for r in rows]}
+
+    def participation_exists(self, pid):
+        with self.db() as con:
+            return con.execute('SELECT 1 FROM participations WHERE id=?', (pid,)).fetchone() is not None
+
+    def kick(self, lid, pid):
+        """Retire un participant : ses réponses sont supprimées (CASCADE)."""
+        with self.lock, self.db() as con:
+            self._live(con, lid)
+            row = con.execute('SELECT id FROM participations WHERE id=? AND live_id=?', (pid, lid)).fetchone()
+            if row is None:
+                raise ResourceNotFound('Participation introuvable dans ce Live.')
+            con.execute('DELETE FROM participations WHERE id=?', (pid,))
+            self.connections.get(lid, {}).pop(pid, None)
+        return {'kicked': True, 'participation_id': pid, 'live_id': lid}
 
     def csv(self, ids):
         output = io.StringIO(newline='')

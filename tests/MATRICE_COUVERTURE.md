@@ -2,7 +2,7 @@
 
 ## Objectif et périmètre
 
-Les **42 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
+Les **47 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
 
 Le test d'inventaire `test_inventaire_openapi_et_websockets` échoue si une route apparaît/disparaît sans être ajoutée à la matrice des tests. Le test `test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant` essaie systématiquement chaque route protégée en étant anonyme et étudiant. La suite n'utilise **ni le port 8080, ni `/etc/classlive`, ni le workspace réel**.
 
@@ -44,7 +44,8 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 | Exercices | réponses des cinq types, JSON structuré, limite 64 Kio, historique des modifications, dernière réponse affichée, aucune note/point | `test_contrat_exhaustif.py`, `test_live.py`, `test_classlive_curl.sh` |
 | Corrigés | format Markdown YAML, absence de fuite, show/hide exclusivement formateur, 409 si aucun corrigé, désactivation des réponses, erreurs YAML = 422 | `test_correction_help.py`, `test_contrat_exhaustif.py`, `test_classlive_curl.sh`, `test_reseau_multiclients.py` |
 | Résultats et CSV | identité et participation, export session/événement, BOM UTF-8, séparateur `;`, données JSON, sans points, archive et suppression | `test_correction_help.py`, `test_live.py`, `test_contrat_exhaustif.py`, `test_classlive_curl.sh`, `test_reseau_multiclients.py` |
-| Stats agrégées | `GET /live/{id}/stats` : décompte par option pour QCM, total seul pour les autres types, aucune identité, 401 sans jeton, 404 Live inconnu | `test_edge_cases.py` |
+| Stats agrégées | `GET /live/{id}/stats` : décompte par option pour QCM, total seul pour les autres types, aucune identité, 401 sans jeton, 404 Live inconnu ; `?all=1` pour toutes les slides | `test_edge_cases.py`, `test_front_ready.py` |
+| Préparation front | CORS (origines libres/restreintes), `/live/active`, kick (404, CASCADE, fermeture WS au ping, notif moniteur), duplicate (conflits de nom, symlink rejeté, OSError), liste globale `/events`, change-password (401/422/503/429, invalidation tokens) | `test_front_ready.py` |
 | WebSocket étudiant et moniteur | ouverture, rejet jetons invalides 1008, présence, ping/pong, diffusion des slides et corrections, suivi des réponses, déconnexion | `test_contrat_exhaustif.py`, `test_live.py`, `ws_live_smoke.py`, `test_reseau_multiclients.py` |
 | Concurrence et redémarrage | **30 étudiants en parallèle** : inscriptions, connexions, réponses, absence de mélange, déconnexions partielles, reprise après arrêt du processus avec SQLite persistant | `test_reseau_multiclients.py` |
 | Charge | **100 étudiants** (`test_charge_100.py`) : mêmes vérifications qu'à 30 | `test_charge_100.py` |
@@ -57,7 +58,10 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 ## Routes couvertes (OpenAPI)
 
 - Authentification et étudiants : `POST /auth/login`, `POST /student/join`, `POST /student/resume`, `GET /student/current`, `POST /student/answers`.
-- Formateur Live : `POST /live/start`, `POST /live/{id}/next`, `previous`, `goto`, `correction/show`, `correction/hide`, `stop` ; `GET /live/{id}/status`, `students`, `results`, `stats`, `export.csv` ; `DELETE /live/{id}`.
+- Formateur Live : `POST /live/start`, `POST /live/{id}/next`, `previous`, `goto`, `correction/show`, `correction/hide`, `stop` ; `GET /live/active`, `GET /live/{id}/status`, `students`, `results`, `stats` (`?all=1`), `export.csv` ; `DELETE /live/{id}`, `DELETE /live/{id}/students/{pid}`.
+- Événements : `GET /events` (liste globale), `POST /groups/{g}/events/{e}/duplicate`.
+- Auth : `POST /auth/change-password` (rate limité, invalide les jetons).
+- CORS : origines via `security.cors_origins`.
 - Sessions d'événement : `GET /groups/{group}/events/{event}/sessions`, `export.csv` ; `DELETE /groups/{group}/events/{event}/sessions`.
 - Groupes et événements : `GET/POST /groups`, `POST /events`, `PATCH/DELETE /groups/{group}`, `GET /groups/{group}/events`, `PATCH/DELETE /groups/{group}/events/{title}`.
 - Slides : `GET/POST /groups/{group}/events/{event}/slides`, `GET/PATCH/DELETE /groups/{group}/events/{event}/slides/{slide}`, `PUT /groups/{group}/events/{event}/slides/{slide}/content`.

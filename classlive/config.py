@@ -19,6 +19,7 @@ class Settings:
     api_key: str | None = None
     trainer_username: str = "formateur"
     trainer_password: str | None = None
+    cors_origins: tuple[str, ...] = ("*",)
 
     @property
     def events_root(self) -> Path:
@@ -73,9 +74,12 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         raise ValueError("classlive.logging.level invalide.")
     if api_key is not None and (not isinstance(api_key, str) or not api_key.strip()):
         raise ValueError("classlive.security.api_key doit être une chaîne non vide ou null.")
+    cors_origins = security.get('cors_origins', ['*'])
+    if not isinstance(cors_origins, list) or not cors_origins or any(not isinstance(o, str) or not o.strip() for o in cors_origins):
+        raise ValueError("classlive.security.cors_origins doit être une liste non vide de chaînes (ex: [\"*\"]).")
     trainer_username = security.get('trainer_username', 'formateur')
     trainer_password = os.getenv('CLASSLIVE_TRAINER_PASSWORD')
     if not isinstance(trainer_username, str) or not trainer_username.strip():
         raise ValueError('classlive.security.trainer_username invalide.')
     return Settings(trainer_username=trainer_username, trainer_password=trainer_password, workdir=workdir, events_dir=events_dir, host=host, port=port,
-                    log_level=level.upper(), api_key=api_key)
+                    log_level=level.upper(), api_key=api_key, cors_origins=tuple(cors_origins))

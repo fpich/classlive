@@ -16,11 +16,12 @@ from classlive.api import create_app
 from classlive.config import Settings
 
 
-# 42 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
+# 47 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
 # Chaque route dispose en plus d'un scénario fonctionnel dans les tests historiques,
 # dans les nouveaux tests de ce fichier, ou dans test_reseau_multiclients.py.
 PUBLIC_ROUTES = {
     ('POST', '/api/v1/auth/login'),
+    ('POST', '/api/v1/auth/change-password'),
     ('POST', '/api/v1/student/join'),
     ('POST', '/api/v1/student/resume'),
     ('GET', '/api/v1/student/current'),
@@ -36,6 +37,8 @@ PUBLIC_ROUTES = {
     ('GET', '/api/v1/live/{live_id}/students'),
     ('GET', '/api/v1/live/{live_id}/results'),
     ('GET', '/api/v1/live/{live_id}/stats'),
+    ('GET', '/api/v1/live/active'),
+    ('DELETE', '/api/v1/live/{live_id}/students/{participation_id}'),
     ('GET', '/api/v1/live/{live_id}/export.csv'),
     ('GET', '/api/v1/groups/{group}/events/{event}/sessions'),
     ('DELETE', '/api/v1/groups/{group}/events/{event}/sessions'),
@@ -47,6 +50,8 @@ PUBLIC_ROUTES = {
     ('GET', '/api/v1/groups'),
     ('GET', '/api/v1/groups/{group}/events'),
     ('POST', '/api/v1/events'),
+    ('GET', '/api/v1/events'),
+    ('POST', '/api/v1/groups/{group}/events/{event}/duplicate'),
     ('PATCH', '/api/v1/groups/{group}'),
     ('DELETE', '/api/v1/groups/{group}'),
     ('PATCH', '/api/v1/groups/{group}/events/{title}'),
@@ -65,7 +70,8 @@ PUBLIC_ROUTES = {
 }
 
 PUBLIC_ENDPOINTS = {
-    ('POST', '/api/v1/auth/login'), ('POST', '/api/v1/student/join'),
+    ('POST', '/api/v1/auth/login'), ('POST', '/api/v1/auth/change-password'),
+    ('POST', '/api/v1/student/join'),
     ('GET', '/api/v1/help'), ('GET', '/health'),
 }
 STUDENT_ENDPOINTS = {
@@ -111,7 +117,8 @@ def test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant(client
     live, student = start_student(client, group, event)
     concrete = path.format(
         group=group, event=event, title=event, live_id=live['live_id'],
-        slide=slides[0], session_id='session_inexistante')
+        slide=slides[0], session_id='session_inexistante',
+        participation_id=student['participation_id'])
     for header in ('', f'Bearer {student["student_session_id"]}'):
         r = client.request(method, concrete, headers={'Authorization': header})
         assert r.status_code == 401, (method, concrete, r.status_code, r.text)
