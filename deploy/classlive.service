@@ -1,0 +1,25 @@
+[Unit]
+Description=ClassLive Backend REST API
+After=network.target
+
+[Service]
+Type=simple
+User=classlive
+Group=classlive
+WorkingDirectory=/opt/classlive
+Environment=CLASSLIVE_CONFIG=/etc/classlive/config.yml
+EnvironmentFile=/etc/classlive/classlive.env
+ExecStart=/opt/classlive/.venv/bin/python -m classlive
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadWritePaths=__CLASSLIVE_WORKSPACE__
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

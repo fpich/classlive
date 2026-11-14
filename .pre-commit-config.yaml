@@ -1,0 +1,19 @@
+repos:
+  - repo: local
+    hooks:
+      - id: bash-syntax
+        name: Vérification syntaxe Bash
+        entry: bash -n
+        language: system
+        files: \.(sh)$
+      - id: python-compile
+        name: Compilation Python
+        entry: python -m compileall -q
+        language: system
+        files: \.py$
+      - id: pytest-quick
+        name: Tests rapides pytest
+        entry: python -m pytest -q -p no:cacheprovider --disable-warnings -x
+        language: system
+        pass_filenames: false
+        always_run: true

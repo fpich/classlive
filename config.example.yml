@@ -1,0 +1,14 @@
+classlive:
+  server:
+    host: "0.0.0.0"
+    port: 8080
+  storage:
+    workdir: "~/classlive_workspace"
+    events_dir: "Evts"
+  logging:
+    level: "INFO"
+  security:
+    trainer_username: "formateur"
+    # Mot de passe dans CLASSLIVE_TRAINER_PASSWORD (fichier systemd .env)
+    # Option de compatibilité : X-API-Key donne les droits formateur si renseigné.
+    api_key: null

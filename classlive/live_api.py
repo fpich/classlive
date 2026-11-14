@@ -1,0 +1,304 @@
+"""Protected trainer routes and restricted student routes; no HTML frontend."""
+from __future__ import annotations
+
+import asyncio
+import hmac
+import secrets
+import time
+from collections import defaultdict
+from typing import Any
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
+
+from classlive.config import Settings
+from classlive.live import LiveStore
+from classlive.storage import ResourceConflict, ResourceNotFound
+
+
+class Login(BaseModel):
+    username: str
+    password: str
+
+
+class Begin(BaseModel):
+    group: str
+    title: str
+
+
+class Jump(BaseModel):
+    number: int = Field(ge=1, le=999999, strict=True)
+
+
+class Join(BaseModel):
+    session_code: str = Field(min_length=6,max_length=6,pattern=r'^\d{6}$')
+    nom: str = Field(min_length=1,max_length=100)
+    prenom: str = Field(min_length=1,max_length=100)
+
+
+class Submit(BaseModel):
+    answer: dict[str, Any]
+
+
+class Auth:
+    _LOGIN_WINDOW = 60          # fenêtre de rate limiting (secondes)
+    _LOGIN_MAX = 5              # tentatives max par fenêtre et par IP
+
+    def __init__(self, cfg: Settings, store: LiveStore):
+        self.cfg = cfg
+        self.store = store
+        self.trainers: dict[str, float] = {}
+        self._login_attempts: dict[str, list[float]] = {}
+
+    def _check_rate_limit(self, client_ip: str):
+        now = time.monotonic()
+        attempts = [t for t in self._login_attempts.get(client_ip, []) if now - t < self._LOGIN_WINDOW]
+        if len(attempts) >= self._LOGIN_MAX:
+            raise HTTPException(status_code=429, detail='Trop de tentatives de connexion. Réessayez dans une minute.')
+        attempts.append(now)
+        self._login_attempts[client_ip] = attempts
+
+    def login(self, payload: Login, client_ip: str = 'unknown'):
+        self._check_rate_limit(client_ip)
+        if not self.cfg.trainer_password:
+            raise HTTPException(status_code=503,detail='Configurer CLASSLIVE_TRAINER_PASSWORD avant de se connecter.')
+        if (not hmac.compare_digest(payload.username,self.cfg.trainer_username)
+                or not hmac.compare_digest(payload.password,self.cfg.trainer_password)):
+            raise HTTPException(status_code=401,detail='Identifiants invalides.')
+        token=secrets.token_urlsafe(32)
+        self.trainers[token]=time.monotonic()+8*3600
+        return {'access_token':token,'token_type':'bearer','expires_in':28800,'role':'trainer'}
+
+    def valid_trainer(self, token: str) -> bool:
+        expiry=self.trainers.get(token,0)
+        if expiry<=time.monotonic():
+            self.trainers.pop(token,None)
+            return False
+        return True
+
+    def trainer(self, authorization: str | None=Header(default=None), x_api_key: str | None=Header(default=None)):
+        if self.cfg.api_key and x_api_key and hmac.compare_digest(x_api_key,self.cfg.api_key):
+            return {'role':'trainer'}
+        token=authorization.partition(' ')[2] if authorization and authorization.lower().startswith('bearer ') else ''
+        if not self.valid_trainer(token):
+            raise HTTPException(status_code=401, detail='Authentification formateur requise.')
+        return {'role':'trainer'}
+
+    def student(self, authorization: str | None=Header(default=None)):
+        token=authorization.partition(' ')[2] if authorization and authorization.lower().startswith('bearer ') else ''
+        participant=self.store.authenticate_student(token)
+        if participant is None:
+            raise HTTPException(status_code=401,detail='Jeton étudiant invalide ou Live terminé.')
+        return participant
+
+
+class Hub:
+    def __init__(self):
+        self.students: dict[str,set[WebSocket]] = defaultdict(set)
+        self.trainers: dict[str,set[WebSocket]] = defaultdict(set)
+
+    async def publish(self, lid, message, trainer_only=False):
+        targets=list(self.trainers.get(lid,set()))
+        if not trainer_only:
+            targets+=list(self.students.get(lid,set()))
+        for ws in targets:
+            try:
+                await ws.send_json(message)
+            except (WebSocketDisconnect, RuntimeError):
+                self.trainers[lid].discard(ws)
+                self.students[lid].discard(ws)
+
+
+def install_live_api(app, cfg: Settings, store: LiveStore):
+    auth=Auth(cfg,store)
+    hub=Hub()
+    app.state.live_store=store
+    app.state.live_auth=auth
+    app.state.live_hub=hub
+    trainer_routes=APIRouter(prefix='/api/v1', dependencies=[Depends(auth.trainer)])
+    student_routes=APIRouter(prefix='/api/v1')
+
+    @student_routes.post('/auth/login', tags=['Authentification'])
+    def login(payload: Login, request: Request):
+        client_ip = request.client.host if request.client else 'unknown'
+        return auth.login(payload, client_ip)
+
+    @trainer_routes.post('/live/start', tags=['Live formateur'])
+    def start(payload: Begin):
+        return store.start(payload.group,payload.title)
+
+    async def movement(lid,direction,number=None):
+        result=store.move(lid,direction,number)
+        await hub.publish(lid,{'event':'slide_changed','current':result})
+        return result
+
+    @trainer_routes.post('/live/{live_id}/next',tags=['Live formateur'])
+    async def next_(live_id: str):
+        return await movement(live_id,'next')
+
+    @trainer_routes.post('/live/{live_id}/previous',tags=['Live formateur'])
+    async def previous(live_id: str):
+        return await movement(live_id,'previous')
+
+    @trainer_routes.post('/live/{live_id}/goto',tags=['Live formateur'])
+    async def goto(live_id: str, payload: Jump):
+        return await movement(live_id,'goto',payload.number)
+
+    @trainer_routes.get('/live/{live_id}/status',tags=['Live formateur'])
+    def live_status(live_id: str):
+        return store.state(live_id,include_content=True)
+
+    async def set_correction(live_id: str, visible: bool):
+        result = store.correction(live_id, visible)
+        await hub.publish(live_id, {'event': 'correction_shown' if visible else 'correction_hidden', 'current': result})
+        return result
+
+    @trainer_routes.post('/live/{live_id}/correction/show',tags=['Live formateur'])
+    async def show_correction(live_id: str):
+        return await set_correction(live_id, True)
+
+    @trainer_routes.post('/live/{live_id}/correction/hide',tags=['Live formateur'])
+    async def hide_correction(live_id: str):
+        return await set_correction(live_id, False)
+
+    @trainer_routes.post('/live/{live_id}/stop',tags=['Live formateur'])
+    async def stop(live_id: str):
+        result=store.stop(live_id)
+        await hub.publish(live_id,{'event':'live_ended','live_id':live_id})
+        return result
+
+    @trainer_routes.get('/live/{live_id}/students',tags=['Live formateur'])
+    def students(live_id: str):
+        return store.students(live_id)
+
+    @trainer_routes.get('/live/{live_id}/results',tags=['Résultats'])
+    def results(live_id: str):
+        return store.results(live_id)
+
+    @trainer_routes.get('/live/{live_id}/stats',tags=['Résultats'])
+    def live_stats(live_id: str):
+        return store.stats(live_id)
+
+    @trainer_routes.get('/live/{live_id}/export.csv',tags=['Résultats'])
+    def export_live(live_id: str):
+        return Response(store.csv([live_id]),media_type='text/csv; charset=utf-8',
+                        headers={'Content-Disposition':f'attachment; filename="classlive_{live_id}.csv"'})
+
+    @trainer_routes.get('/groups/{group}/events/{event}/sessions',tags=['Résultats'])
+    def list_sessions(group: str,event: str):
+        return store.sessions(group,event)
+
+    @trainer_routes.get('/groups/{group}/events/{event}/export.csv',tags=['Résultats'])
+    def export_event(group: str,event: str):
+        return Response(store.event_csv(group,event),media_type='text/csv; charset=utf-8',
+                        headers={'Content-Disposition':'attachment; filename="classlive_evenement.csv"'})
+
+    @trainer_routes.delete('/live/{live_id}',tags=['Résultats'])
+    def delete_session(live_id: str):
+        return store.delete(live_id)
+
+    @trainer_routes.delete('/groups/{group}/events/{event}/sessions',tags=['Résultats'])
+    def reset(group: str,event: str):
+        return store.reset(group,event)
+
+    @student_routes.post('/student/join',tags=['Étudiants'])
+    async def join(payload: Join):
+        nom,prenom=payload.nom.strip(),payload.prenom.strip()
+        if not nom or not prenom or any(ord(x)<32 for x in nom+prenom):
+            raise HTTPException(status_code=422,detail='Nom et prénom obligatoires et valides.')
+        result=store.join(payload.session_code,nom,prenom)
+        await hub.publish(result['live_id'],{'event':'student_joined','participation_id':result['participation_id']},trainer_only=True)
+        return result
+
+    @student_routes.post('/student/resume',tags=['Étudiants'])
+    def resume(student=Depends(auth.student)):
+        return store.resume(student)
+
+    @student_routes.get('/student/current',tags=['Étudiants'])
+    def current(student=Depends(auth.student)):
+        store.touch(student['id'])
+        return store.state(student['live_id'],include_content=True)
+
+    @student_routes.post('/student/answers',tags=['Étudiants'])
+    async def answer(payload: Submit,student=Depends(auth.student)):
+        try:
+            result=store.submit(student,payload.answer)
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        await hub.publish(student['live_id'],{'event':'answer_received','participation_id':student['id']},trainer_only=True)
+        return result
+
+    async def authorize_ws(ws: WebSocket, trainer: bool):
+        await ws.accept()
+        try:
+            packet=await asyncio.wait_for(ws.receive_json(),timeout=10)
+        except (ValueError,asyncio.TimeoutError,WebSocketDisconnect):
+            await ws.close(code=1008)
+            return None
+        token=packet.get('token') if isinstance(packet,dict) else None
+        if not isinstance(token,str):
+            await ws.close(code=1008)
+            return None
+        if trainer:
+            if not auth.valid_trainer(token):
+                await ws.close(code=1008)
+                return None
+            return {'role':'trainer'}
+        participant=store.authenticate_student(token)
+        if participant is None:
+            await ws.close(code=1008)
+            return None
+        return participant
+
+    @app.websocket('/api/v1/student/ws')
+    async def student_ws(ws: WebSocket):
+        student=await authorize_ws(ws,False)
+        if student is None:
+            return
+        lid,pid=student['live_id'],student['id']
+        hub.students[lid].add(ws)
+        store.connected(lid,pid)
+        await ws.send_json({'event':'current','current':store.state(lid,include_content=True)})
+        await hub.publish(lid,{'event':'student_connected','participation_id':pid},trainer_only=True)
+        try:
+            while True:
+                data=await ws.receive_json()
+                if isinstance(data,dict) and data.get('event')=='ping':
+                    if store.state(lid)['status'] != 'running':
+                        await ws.close(code=1008)
+                        break
+                    store.ping(lid,pid)
+                    await ws.send_json({'event':'pong'})
+                else:
+                    await ws.send_json({'event':'error','detail':'Seul ping est autorisé.'})
+        except WebSocketDisconnect:
+            pass
+        finally:
+            hub.students[lid].discard(ws)
+            store.disconnected(lid,pid)
+            await hub.publish(lid,{'event':'student_disconnected','participation_id':pid},trainer_only=True)
+
+    @app.websocket('/api/v1/live/{live_id}/monitor')
+    async def trainer_ws(ws: WebSocket,live_id: str):
+        trainer=await authorize_ws(ws,True)
+        if trainer is None:
+            return
+        try:
+            store.state(live_id)
+        except ResourceNotFound:
+            await ws.close(code=1008)
+            return
+        hub.trainers[live_id].add(ws)
+        await ws.send_json({'event':'monitor','students':store.students(live_id),'current':store.state(live_id)})
+        try:
+            while True:
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            pass
+        finally:
+            hub.trainers[live_id].discard(ws)
+
+    app.include_router(student_routes)
+    app.include_router(trainer_routes)
+    return auth

@@ -1,0 +1,13 @@
+.venv/
+.coverage
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.egg-info/
+config.yml
+.env
+build/
+dist/
+.venv-tests/
+tests/rapports/
+classlive_test_*.csv
