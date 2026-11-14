@@ -1,7 +1,7 @@
 """Slides Markdown: SNNN_TYPE_Titre.md, uniques par numéro dans un événement.
 
 Types : C contenu, A association, O ordre, R catégories, Q QCM, T texte à trous,
-F texte libre, P sondage, N nuage de mots, L échelle (Likert 1-5).
+F texte libre, P sondage, N nuage de mots, L échelle (Likert 1-5), I pin sur image (x/y normalisés 0-1).
 """
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from pathlib import Path
 
 from classlive.storage import EventStorage, InvalidName, ResourceConflict, ResourceNotFound, StorageError, normalize_name
 
-SLIDE_TYPES = frozenset({'C', 'A', 'O', 'R', 'Q', 'T', 'F', 'P', 'N', 'L'})
-SLIDE_RE = re.compile(r'^S([0-9]{3,})_([CAORQTFNPL])_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)\.md$')
+SLIDE_TYPES = frozenset({'C', 'A', 'O', 'R', 'Q', 'T', 'F', 'P', 'N', 'L', 'I'})
+SLIDE_RE = re.compile(r'^S([0-9]{3,})_([CAORQTFNPLI])_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)\.md$')
 # Médias servis publiquement depuis le sous-dossier media/ de l'événement.
 MEDIA_RE = re.compile(r'^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*\.(png|jpe?g|gif|svg|webp|pdf)$', re.IGNORECASE)
 MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -30,7 +30,7 @@ class SlideStorage:
     @staticmethod
     def _type(value: str) -> str:
         if not isinstance(value, str) or value not in SLIDE_TYPES:
-            raise InvalidName('Type de slide invalide : C, A, O, R, Q, T, F, P, N ou L uniquement.')
+            raise InvalidName('Type de slide invalide : C, A, O, R, Q, T, F, P, N, L ou I uniquement.')
         return value
 
     @staticmethod

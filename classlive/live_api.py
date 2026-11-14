@@ -32,6 +32,7 @@ class Begin(BaseModel):
     timing_seconds: int | None = None
     correction: str | None = None
     start_at: str | None = None  # ISO 8601 futur -> session planifiée (scheduled)
+    anonymous: bool = False  # masque les identités dans results / export CSV
 
 
 class TextPayload(BaseModel):
@@ -241,7 +242,7 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         try:
             result = store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
                                  timing_seconds=payload.timing_seconds, correction_mode=correction,
-                                 start_at=payload.start_at)
+                                 start_at=payload.start_at, anonymous=payload.anonymous)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         result['join_url'] = ('/app/join?code=' if cfg.frontend_dir else '/join?code=') + result['session_code']

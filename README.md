@@ -141,7 +141,7 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `PATCH` | `/groups/{group}/events/{event}/slides/{slide}` | Modifier `new_name` / `new_number` / `new_type` |
 | `PUT` | `/groups/{group}/events/{event}/slides/{slide}/content` | Remplacer le Markdown |
 | `DELETE` | `/groups/{group}/events/{event}/slides/{slide}` | Supprimer une slide |
-| `POST` | `/live/start` | Démarrer (`{"group","title"}`) ; retourne `live_id`, `session_code`. Options mode autonome : `mode:"autonome"`, `timing:"none|par_question|par_evenement"`, `timing_seconds:N`, `correction:"jamais|après_question|à_la_fin"` |
+| `POST` | `/live/start` | Démarrer (`{"group","title"}`) ; retourne `live_id`, `session_code`, `join_url`. Options : `mode:"live|autonome"`, `timing` (`live`: `none|par_question` avec `timing_seconds` = compte à rebours par slide ; `autonome`: `none|par_question|par_evenement`), `correction:"jamais|après_question|à_la_fin"` (autonome), `start_at` (ISO futur = planification), `anonymous:true` (résultats sans identités) |
 | `GET` | `/live/{live_id}/status` | Slide et état actuel |
 | `POST` | `/live/{live_id}/next` | Slide suivante |
 | `POST` | `/live/{live_id}/previous` | Slide précédente |
@@ -272,6 +272,13 @@ classlive:
   media:
     max_file_mb: 10              # taille max d'un média uploadé par événement
 ```
+
+## v0.9.2 — Pin sur image, compte à rebours live, résultats anonymes
+
+- **Type de slide `I` (pin sur image)** : réponse `{"x":0.25,"y":0.5}` (position relative 0–1 sur un média de l'événement, validation 422 hors bornes). Stats : `pins` (liste des points) + `center` (centre de gravité). Verrouillage identique aux autres exercices en autonome.
+- **Compte à rebours par slide en mode live** : `POST /live/start` accepte désormais `timing:"par_question"` + `timing_seconds` en mode live. La `deadline` est fixée au start, **renouvelée à chaque navigation**, exposée dans `GET /live/{id}/status` et dans `GET /student/current` (`expires_at`, `time_expired`) ; passé l'expiry, toute soumission → **409 « Temps écoulé »**. Calculée à l'activation si la session est planifiée.
+- **Mode anonyme** : `anonymous:true` au start masque nom/prénom dans `GET /live/{id}/results` et l'export CSV (`anonymous:true` exposé, `participation_id` conservé). Le récap perso de l'élève, `student-results` par nom et le droit à l'oubli RGPD continuent de fonctionner sur les identités réelles.
+- 11 types de slides, 80 routes, **424 tests, couverture 100 %**.
 
 ## v0.9.x — Toutes les fonctionnalités restantes (front-ready complet)
 

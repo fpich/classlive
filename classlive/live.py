@@ -20,7 +20,7 @@ import yaml
 from classlive.slides import SLIDE_RE, SlideStorage
 from classlive.storage import ResourceConflict, ResourceNotFound
 
-EXERCISES = set('AORQTFNPL')
+EXERCISES = set('AORQTFNPLI')
 
 logger = logging.getLogger("classlive")
 
@@ -138,6 +138,7 @@ class LiveStore:
                 ('correction_mode', "TEXT NOT NULL DEFAULT 'show'"),
                 ('deadline', "TEXT"),
                 ('announcement', "TEXT"),
+                ('anonymous', "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if col not in columns:
                     con.execute(f'ALTER TABLE live_sessions ADD COLUMN {col} {ddl}')
@@ -174,9 +175,11 @@ class LiveStore:
 
     def start(self, group: str, event: str, mode: str = 'live', timing: str = 'none',
               timing_seconds: int | None = None, correction_mode: str = 'show',
-              start_at: str | None = None) -> dict:
+              start_at: str | None = None, anonymous: bool = False) -> dict:
         """Démarre une session. mode='live' (formateur pilote) ou 'autonome' (élèves à leur rythme).
-        start_at (ISO 8601, futur) planifie la session : status='scheduled' jusqu'à l'activation."""
+        start_at (ISO 8601, futur) planifie la session : status='scheduled' jusqu'à l'activation.
+        En mode live, timing='par_question' ajoute un compte à rebours par slide (deadline renouvelée
+        à chaque navigation). anonymous=True masque les identités dans results/export CSV."""
         if mode not in ('live', 'autonome'):
             raise ValueError("mode doit être 'live' ou 'autonome'.")
         scheduled_at = None
@@ -201,7 +204,14 @@ class LiveStore:
             if correction_mode not in ('jamais', 'après_question', 'à_la_fin'):
                 raise ValueError("correction_mode doit être 'jamais', 'après_question' ou 'à_la_fin'.")
         else:
-            timing, timing_seconds, correction_mode = 'none', None, 'show'
+            if timing not in ('none', 'par_question'):
+                raise ValueError("En mode live, timing doit être 'none' ou 'par_question' (compte à rebours).")
+            if timing == 'par_question':
+                if type(timing_seconds) is not int or not 1 <= timing_seconds <= 86400:
+                    raise ValueError('timing_seconds requis (1 à 86400) pour le compte à rebours par slide.')
+            else:
+                timing_seconds = None
+            correction_mode = 'show'
         # Freeze both public slide and private correct answers for historical integrity.
         with self.lock, self.slides.events._lock:
             g, parent = self.slides._parent(group, event)
@@ -224,18 +234,21 @@ class LiveStore:
                         break
                 else:
                     raise ResourceConflict('Aucun code Live disponible.')
-                # En planification, la deadline par_evenement n'est calculée qu'à l'activation.
+                # En planification, la deadline n'est calculée qu'à l'activation.
                 deadline = None
-                if mode == 'autonome' and timing == 'par_evenement' and scheduled_at is None:
-                    deadline = datetime.fromtimestamp(time.time() + timing_seconds, timezone.utc).isoformat()
+                if scheduled_at is None:
+                    if mode == 'autonome' and timing == 'par_evenement':
+                        deadline = datetime.fromtimestamp(time.time() + timing_seconds, timezone.utc).isoformat()
+                    elif mode == 'live' and timing == 'par_question':
+                        deadline = datetime.fromtimestamp(time.time() + timing_seconds, timezone.utc).isoformat()
                 status = 'scheduled' if scheduled_at is not None else 'running'
-                con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number,mode,timing,timing_seconds,correction_mode,deadline) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-                            (lid, code, g.name, parent.name, scheduled_at or now(), status, prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline))
+                con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number,mode,timing,timing_seconds,correction_mode,deadline,anonymous) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                            (lid, code, g.name, parent.name, scheduled_at or now(), status, prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline, int(bool(anonymous))))
                 con.executemany('INSERT INTO snapshots(live_id,number,filename,kind,public_content,answer_key) VALUES (?,?,?,?,?,?)',
                                 [(lid, *row) for row in prepared])
             return {'live_id': lid, 'session_code': code, 'group': g.name, 'event': parent.name, 'current_slide': prepared[0][1],
                     'status': status, 'started_at': scheduled_at or now(), 'mode': mode, 'timing': timing,
-                    'timing_seconds': timing_seconds, 'correction_mode': correction_mode}
+                    'timing_seconds': timing_seconds, 'correction_mode': correction_mode, 'anonymous': bool(anonymous)}
 
     def state(self, lid: str, include_content: bool = False):
         with self.db() as con:
@@ -248,7 +261,7 @@ class LiveStore:
                       'total': len(slides), 'revision': session['revision'],
                       'timing': session['timing'], 'timing_seconds': session['timing_seconds'],
                       'correction_mode': session['correction_mode'], 'deadline': session['deadline'],
-                      'announcement': session['announcement'],
+                      'announcement': session['announcement'], 'anonymous': bool(session['anonymous']),
                       'correction_visible': bool(session['correction_visible']) if current['kind'] in EXERCISES else False}
             if include_content:
                 result['content'] = current['public_content']
@@ -275,7 +288,12 @@ class LiveStore:
                 target = number
             else:
                 raise ValueError('Direction invalide.')
-            con.execute('UPDATE live_sessions SET current_number=?,correction_visible=0,revision=revision+1 WHERE id=?', (target,lid))
+            if session['mode'] == 'live' and session['timing'] == 'par_question' and session['timing_seconds']:
+                new_deadline = datetime.fromtimestamp(time.time() + session['timing_seconds'], timezone.utc).isoformat()
+                con.execute('UPDATE live_sessions SET current_number=?,correction_visible=0,deadline=?,revision=revision+1 WHERE id=?',
+                            (target, new_deadline, lid))
+            else:
+                con.execute('UPDATE live_sessions SET current_number=?,correction_visible=0,revision=revision+1 WHERE id=?', (target,lid))
         return self.state(lid, include_content=True)
 
     def announce(self, lid: str, text: str):
@@ -310,7 +328,9 @@ class LiveStore:
             if session['status'] != 'scheduled':
                 return {'activated': False, 'live_id': lid, 'status': session['status']}
             deadline = session['deadline']
-            if session['mode'] == 'autonome' and session['timing'] == 'par_evenement' and session['timing_seconds']:
+            if session['timing_seconds'] and (
+                    (session['mode'] == 'autonome' and session['timing'] == 'par_evenement')
+                    or (session['mode'] == 'live' and session['timing'] == 'par_question')):
                 deadline = datetime.fromtimestamp(time.time() + session['timing_seconds'], timezone.utc).isoformat()
             con.execute("UPDATE live_sessions SET status='running', deadline=?, revision=revision+1 WHERE id=? AND status='scheduled'",
                         (deadline, lid))
@@ -473,6 +493,9 @@ class LiveStore:
                 elif show_correction:
                     result['correction'] = None
             else:
+                if live['timing'] == 'par_question' and snap['kind'] in EXERCISES and live['deadline']:
+                    result['expires_at'] = live['deadline']
+                    result['time_expired'] = time.time() > datetime.fromisoformat(live['deadline']).timestamp()
                 result['correction_visible'] = bool(live['correction_visible']) if snap['kind'] in EXERCISES else False
                 if result['correction_visible'] and live['correction_visible']:
                     private = con.execute('SELECT answer_key FROM snapshots WHERE live_id=? AND number=?',
@@ -566,6 +589,11 @@ class LiveStore:
             value = answer.get('value')
             if type(value) is not int or not 1 <= value <= 5:
                 raise ValueError('Échelle : value doit être un entier entre 1 et 5.')
+        elif kind == 'I':  # pin sur image : coordonnées normalisées 0..1
+            x, y = answer.get('x'), answer.get('y')
+            if type(x) not in (int, float) or type(y) not in (int, float) \
+                    or not 0 <= x <= 1 or not 0 <= y <= 1:
+                raise ValueError('Pin image : x et y requis, nombres entre 0 et 1 (position relative).')
 
     def submit(self, student, answer: object):
         if not isinstance(answer, dict):
@@ -585,6 +613,8 @@ class LiveStore:
                 raise ResourceConflict('La slide en cours n’est pas un exercice.')
             if live['correction_visible']:
                 raise ResourceConflict('Les réponses sont fermées pendant l’affichage de la correction.')
+            if live['timing'] == 'par_question' and live['deadline'] and time.time() > datetime.fromisoformat(live['deadline']).timestamp():
+                raise ResourceConflict('Temps écoulé pour cette question.')
             if live['mode'] == 'autonome':
                 if self._slide_locked(con, student['id'], snap['number']):
                     raise ResourceConflict('Réponse déjà verrouillée pour cette slide.')
@@ -647,6 +677,7 @@ class LiveStore:
         """Données brutes et nombre de réponses, sans points ni notation."""
         with self.db() as con:
             live = self._live(con, lid)
+            anon = bool(live['anonymous'])
             students = con.execute('SELECT * FROM participations WHERE live_id=? ORDER BY joined_at,id', (lid,)).fetchall()
             data = []
             for student in students:
@@ -656,13 +687,13 @@ class LiveStore:
                 latest = {}
                 for row in rows:
                     latest[row['slide_number']] = row
-                data.append({'participation_id':student['id'],'nom':student['nom'],
-                             'prenom':student['prenom'],'answered':len(latest),
+                data.append({'participation_id':student['id'],'nom':'anonyme' if anon else student['nom'],
+                             'prenom':'' if anon else student['prenom'],'answered':len(latest),
                              'answers':[{'slide':row['filename'],'answer':json.loads(row['answer_json']),
                                          'submitted_at':row['submitted_at']} for row in latest.values()]})
         return {'live_id':lid,'group':live['group_name'],'event':live['event_name'],
                 'status':live['status'],'started_at':live['started_at'],
-                'ended_at':live['ended_at'],'results':data}
+                'ended_at':live['ended_at'],'anonymous':anon,'results':data}
 
     def stats(self, lid, all_slides: bool = False):
         """Agrégats sans identité : décompte des réponses.
@@ -702,6 +733,17 @@ class LiveStore:
                             for w in answer.get('words', []):
                                 words[w] = words.get(w, 0) + 1
                     entry['words'] = words
+                elif snap['kind'] == 'I':
+                    pins = []
+                    for row in rows:
+                        answer = json.loads(row['answer_json'])
+                        if isinstance(answer, dict) and type(answer.get('x')) in (int, float) \
+                                and type(answer.get('y')) in (int, float):
+                            pins.append([round(answer['x'], 3), round(answer['y'], 3)])
+                    entry['pins'] = pins
+                    if pins:
+                        entry['center'] = {'x': round(sum(p[0] for p in pins) / len(pins), 3),
+                                           'y': round(sum(p[1] for p in pins) / len(pins), 3)}
                 elif snap['kind'] == 'L':
                     values: dict[str, int] = {}
                     for row in rows:
@@ -717,7 +759,7 @@ class LiveStore:
         s = slides_stats[0]
         result = {'live_id': lid, 'slide': s['slide'], 'slide_type': s['slide_type'],
                   'answered': s['answered'], 'total_students': s['total_students']}
-        for key in ('options', 'words', 'values'):
+        for key in ('options', 'words', 'values', 'pins', 'center'):
             if key in s:
                 result[key] = s[key]
         return result

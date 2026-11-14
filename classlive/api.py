@@ -49,7 +49,7 @@ class RenameRequest(BaseModel):
 
 class SlideRequest(BaseModel):
     title: str = Field(min_length=1, max_length=150)
-    slide_type: str = Field(pattern=r"^[CAORQTFNPL]$")
+    slide_type: str = Field(pattern=r"^[CAORQTFNPLI]$")
     content: str = ""
     number: int | None = Field(default=None, ge=1, le=999999, strict=True)
 
@@ -57,7 +57,7 @@ class SlideRequest(BaseModel):
 class SlideRenameRequest(BaseModel):
     new_name: str | None = Field(default=None, min_length=1, max_length=150)
     new_number: int | None = Field(default=None, ge=1, le=999999, strict=True)
-    new_type: str | None = Field(default=None, pattern=r"^[CAORQTFNPL]$")
+    new_type: str | None = Field(default=None, pattern=r"^[CAORQTFNPLI]$")
 
     @model_validator(mode="after")
     def require_change(self):
@@ -274,7 +274,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             slides_infos = manifest.get("slides")
             if not isinstance(slides_infos, list) or not slides_infos \
                     or any(not isinstance(s, str) or not SLIDE_RE.fullmatch(s) for s in slides_infos):
-                raise HTTPException(status_code=422, detail="manifest.json : liste de slides Sxxx_[CAORQTFNPL]_*.md requise.")
+                raise HTTPException(status_code=422, detail="manifest.json : liste de slides Sxxx_[CAORQTFNPLI]_*.md requise.")
             for name in slides_infos:
                 if name not in names:
                     raise HTTPException(status_code=422, detail=f"Slide {name} absente du ZIP.")
