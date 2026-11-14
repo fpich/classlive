@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from classlive.config import Settings
 from classlive.live import LiveStore
-from classlive.storage import ResourceConflict, ResourceNotFound
+from classlive.storage import ResourceNotFound
 
 
 class Login(BaseModel):

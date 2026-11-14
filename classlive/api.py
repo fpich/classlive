@@ -1,13 +1,12 @@
 """Contrats HTTP publics de ClassLive (v1)."""
 from __future__ import annotations
 
-from pathlib import Path
 from importlib.resources import files
 
 import logging
 import time
 
-from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, model_validator
@@ -190,8 +189,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @router.patch("/groups/{group}", tags=["Groupes"])
     def rename_group(group: str, payload: RenameRequest):
-        if any(s['sessions'] for g in storage.list_groups() if g == storage._group(group).name
-               for e in storage.list_events(g) for s in [live.sessions(g,e)]):
+        resolved = storage._group(group).name
+        if any(live.sessions(resolved, e)['sessions'] for e in (storage.list_events(resolved) or [])):
             raise ResourceConflict('Supprimer les sessions archivées avant de renommer ce groupe.')
         result = storage.rename_group(group, payload.new_name, payload.new_number)
         logger.info("Groupe renommé : %s -> %s (modifié=%s)", group, result["new_name"], result["renamed"])

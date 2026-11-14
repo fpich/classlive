@@ -163,6 +163,11 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `GET` | `/groups/{group}/events/{event}/student-results?nom=&prenom=` | Toutes les réponses d'un élève sur toutes les sessions de l'événement |
 | `DELETE` | `/live/{live_id}` | Supprimer une session **terminée** et ses participations/réponses |
 | `DELETE` | `/groups/{group}/events/{event}/sessions` | Réinitialiser les sessions d'un événement, seulement si aucune n'est active |
+| `POST` | `/player/select` | Démarrer une lecture séquentielle indépendante (`{"group","title"}`) |
+| `POST` | `/player/{session_id}/next` | Slide suivante du lecteur |
+| `POST` | `/player/{session_id}/previous` | Slide précédente du lecteur |
+| `GET` | `/player/{session_id}` | Slide courante du lecteur |
+| `DELETE` | `/player/{session_id}` | Fermer la session de lecture |
 
 Un seul Live peut être actif par événement. Une session terminée reste archivée dans SQLite. Il faut supprimer les sessions archivées avant de renommer ou supprimer le groupe/l'événement, pour empêcher des résultats orphelins ; **la suppression des sessions ne supprime jamais les slides**. L'API de lecture historique `/player/*` reste accessible **uniquement au formateur**.
 
