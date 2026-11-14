@@ -531,6 +531,15 @@ def test_config_session_retention_invalide(tmp_path):
     assert s.max_students == 0 and s.retention_days == 0
 
 
+def test_config_session_join_rate_limit_invalide(tmp_path):
+    for bad in ('-1', '100001', '"300"'):
+        cfg = _write_cfg(tmp_path, _BASE + f'  session:\n    join_rate_limit: {bad}\n')
+        with pytest.raises(ValueError, match="join_rate_limit"):
+            load_settings(cfg)
+    cfg = _write_cfg(tmp_path, _BASE + '  session:\n    join_rate_limit: 0\n')
+    assert load_settings(cfg).join_rate_limit == 0
+
+
 def test_config_audit_invalide(tmp_path):
     cfg = _write_cfg(tmp_path, _BASE + '  audit: "x"\n')
     with pytest.raises(ValueError, match="audit"):

@@ -23,6 +23,8 @@ classlive:
     max_students: 300
     # Rétention des sessions terminées en jours (0 = jamais de purge auto).
     retention_days: 365
+    # Tentatives de join max par minute et par IP (anti brute-force du code à 6 chiffres).
+    join_rate_limit: 300
   audit:
     enabled: true
     # Fichier journal d'audit (défaut: <workdir>/audit.log).

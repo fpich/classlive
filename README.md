@@ -255,6 +255,15 @@ classlive:
     max_zip_mb: 50               # taille max d'un export/import ZIP d'événement
 ```
 
+## v0.9.0 — Release : durcissement et prêt pour le frontend
+
+- **Durcissement import ZIP** : refus 413 précoce sur l'en-tête `Content-Length` (le corps n'est plus lu en mémoire si l'en-tête annonce trop gros), 422 sur en-tête illisible, et **protection anti zip-bomb** (taille décompressée totale plafonnée à `export.max_zip_mb`).
+- **Anti brute-force sur le join** : `session.join_rate_limit` (300 tentatives/min/IP par défaut, 0 = désactivé) → 429 au-delà, protégeant le code Live à 6 chiffres.
+- **Versions de slides** : un `PUT` au contenu identique n'archive plus de version inutile.
+- Audit de sécurité : toutes les requêtes SQL paramétrées (pas d'injection), noms de fichiers validés par expressions régulières strictes (`Gxxx_`, `Exxx_`, `Sxxx_[CAORQT]_*.md`), liens symboliques rejetés, tailles plafonnées (contenu 2 Mo, réponse 64 Ko, question 1000 car, emoji 8 car), rate limiting login/change-password/join, jetons `secrets.token_urlsafe` stockés uniquement en SHA-256, WS authentifiées avec timeout 10 s, erreurs 500 génériques (pas de fuite d'interne).
+- **Prêt pour un frontend** : CORS configurable (`security.cors_origins`), OpenAPI complet (68 routes documentées), `/health`, `/live/active` pour retrouver un Live après refresh, flux étudiant autonome (`join` → `current`/`next`/`previous`/`answers`/`results`), WebSockets documentés (`student/ws`, `live/{id}/monitor`) avec événements `slide_changed`, `question_asked`, `question_answered`, `reaction`, `student_joined`, etc.
+- Tests : **388 tests, couverture 100 %**, suite complète (curl + réseau réel 30 étudiants + soak) et charge **100 étudiants** toutes vertes.
+
 ## v0.8.5 — Exploitation, RGPD et temps réel
 
 - **Multi-comptes formateurs** : `security.trainer_accounts` ajoute des comptes en plus de `CLASSLIVE_TRAINER_PASSWORD`.

@@ -23,6 +23,7 @@ class Settings:
     cors_origins: tuple[str, ...] = ("*",)
     max_students: int = 300
     retention_days: int = 365
+    join_rate_limit: int = 300  # tentatives de join max/min/IP (0 = désactivé)
     audit_enabled: bool = True
     audit_file: Path | None = None
     export_max_zip_mb: int = 50
@@ -95,6 +96,9 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     retention_days = session.get('retention_days', 365)
     if type(retention_days) is not int or not 0 <= retention_days <= 36500:
         raise ValueError('classlive.session.retention_days doit être un entier entre 0 (désactivé) et 36500.')
+    join_rate_limit = session.get('join_rate_limit', 300)
+    if type(join_rate_limit) is not int or not 0 <= join_rate_limit <= 100000:
+        raise ValueError('classlive.session.join_rate_limit doit être un entier entre 0 (désactivé) et 100000.')
 
     audit_cfg = _mapping(config.get('audit'), 'audit')
     audit_enabled = audit_cfg.get('enabled', True)
@@ -123,5 +127,6 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     return Settings(trainer_username=trainer_username, trainer_password=trainer_password,
                     trainer_accounts=tuple(accounts), workdir=workdir, events_dir=events_dir, host=host, port=port,
                     log_level=level.upper(), api_key=api_key, cors_origins=tuple(cors_origins),
-                    max_students=max_students, retention_days=retention_days, audit_enabled=audit_enabled,
+                    max_students=max_students, retention_days=retention_days, join_rate_limit=join_rate_limit,
+                    audit_enabled=audit_enabled,
                     audit_file=audit_path if audit_enabled else None, export_max_zip_mb=export_max_zip_mb)

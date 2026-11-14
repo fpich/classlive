@@ -244,6 +244,29 @@ def test_import_zip_corrompu_et_trop_gros(client, tmp_path):
     with app_client(tmp_path, export_max_zip_mb=0) as c:  # limite 0 -> tout ZIP non vide est trop gros
         r = c.post('/api/v1/groups/G/import.zip', content=b'x')
         assert r.status_code == 413
+        # Corps streamé (sans Content-Length) dépassant la limite : 413 aussi.
+        r = c.post('/api/v1/groups/G/import.zip', content=iter([b'x', b'y', b'z']))
+        assert r.status_code == 413
+
+
+def test_import_zip_entete_content_length_et_zip_bomb(tmp_path):
+    with app_client(tmp_path, export_max_zip_mb=1) as c:
+        c.post('/api/v1/groups', json={'group': 'G'})
+        # En-tête Content-Length au-delà de la limite : refus 413 avant lecture du corps.
+        r = c.post('/api/v1/groups/G/import.zip', content=b'x',
+                   headers={'Content-Length': str(5 * 1024 * 1024)})
+        assert r.status_code == 413, r.text
+        # En-tête Content-Length illisible : 422.
+        r = c.post('/api/v1/groups/G/import.zip', content=b'x', headers={'Content-Length': 'abc'})
+        assert r.status_code == 422, r.text
+        # Zip-bomb : petite archive compressée, mais > 1 Mo décompressé -> 413.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('manifest.json', GOOD_MANIFEST)
+            zf.writestr('S001_C_Intro.md', b'#' * (2 * 1024 * 1024))
+        r = c.post('/api/v1/groups/G/import.zip', content=buf.getvalue())
+        assert r.status_code == 413, r.text
+        assert c.get('/api/v1/groups/G/events').json()['events'] == []
 
 
 # ── Duplication de groupe ───────────────────────────────────────────────────
@@ -313,6 +336,9 @@ def test_versions_slides_cycle_complet(client):
     # Restaurer la version déjà courante (v1) n'archive rien de plus.
     client.post(f'{base}/{slide}/versions/{vid}/restore')
     assert len(client.get(f'{base}/{slide}/versions').json()['versions']) == 4
+    # Un PUT avec un contenu identique n'archive pas de nouvelle version.
+    client.put(f'{base}/{slide}/content', json={'content': '# v1'})
+    assert len(client.get(f'{base}/{slide}/versions').json()['versions']) == 4
     assert any(en['action'] == 'slide_restore' for en in client.get('/api/v1/audit').json()['entries'])
 
 
@@ -347,6 +373,26 @@ def test_max_students_zero_illimite(tmp_path):
         for i in range(5):
             join(c, live['session_code'], f'Nom{i}', f'Prenom{i}')
         assert len(c.get(f'/api/v1/live/{live["live_id"]}/students').json()['students']) == 5
+
+
+def test_join_rate_limit_anti_bruteforce(tmp_path):
+    with app_client(tmp_path, join_rate_limit=3) as c:
+        g, e, _, _ = make_event(c)
+        live = start_live(c, g, e)
+        code = live['session_code']
+        for i in range(3):
+            r = c.post('/api/v1/student/join', json={'session_code': code, 'nom': f'N{i}', 'prenom': 'P'})
+            assert r.status_code == 200, r.text
+        r = c.post('/api/v1/student/join', json={'session_code': code, 'nom': 'N', 'prenom': 'P'})
+        assert r.status_code == 429
+        # Le rate limit ne bloque pas les autres routes publiques.
+        assert c.get('/health').status_code == 200
+    with app_client(tmp_path / 'sans-limite', join_rate_limit=0) as c:  # désactivé
+        g, e, _, _ = make_event(c)
+        live = start_live(c, g, e)
+        for i in range(10):
+            assert c.post('/api/v1/student/join', json={
+                'session_code': live['session_code'], 'nom': f'N{i}', 'prenom': 'P'}).status_code == 200
 
 
 def test_purge_retention_manuel_et_au_demarrage(tmp_path):

@@ -224,8 +224,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def import_event_zip(group: str, request: Request):
         """Importe un événement depuis un ZIP produit par export.zip (manifest.json + slides Sxxx_*.md).
         Le ZIP est envoyé en corps brut (application/zip), sans multipart."""
-        data = await request.body()
         limit = cfg.export_max_zip_mb * 1024 * 1024
+        # Refus précoce si l'en-tête annonce un corps trop gros (évite de tout lire en mémoire).
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > limit:
+                    raise HTTPException(status_code=413, detail=f"ZIP trop volumineux (max {cfg.export_max_zip_mb} Mo).")
+            except ValueError:
+                raise HTTPException(status_code=422, detail="En-tête Content-Length invalide.") from None
+        data = await request.body()
         if not data:
             raise HTTPException(status_code=422, detail="Fichier ZIP vide.")
         if len(data) > limit:
@@ -235,6 +243,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except zipfile.BadZipFile as exc:
             raise HTTPException(status_code=422, detail=f"ZIP invalide : {exc}") from exc
         with zf:
+            # Protection anti zip-bomb : taille décompressée totale plafonnée au même limit.
+            total_uncompressed = sum(info.file_size for info in zf.infolist() if not info.is_dir())
+            if total_uncompressed > limit:
+                raise HTTPException(status_code=413, detail=f"ZIP décompressé trop volumineux (max {cfg.export_max_zip_mb} Mo).")
             names = zf.namelist()
             if "manifest.json" not in names:
                 raise HTTPException(status_code=422, detail="manifest.json manquant dans le ZIP.")
@@ -328,7 +340,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def update_slide_content(group: str, event: str, slide: str, payload: SlideContentRequest):
         old = slides.read(group, event, slide)['content']
         result = slides.update_content(group, event, slide, payload.content)
-        live.record_slide_version(group, event, slide, old, 'formateur')
+        if old != payload.content:  # pas de version archivée si le contenu est identique
+            live.record_slide_version(group, event, slide, old, 'formateur')
         return {"success": True, **result}
 
     @router.get("/groups/{group}/events/{event}/slides/{slide}/versions", tags=["Slides"])

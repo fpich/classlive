@@ -1,4 +1,4 @@
-# ClassLive v0.8.5 — Matrice de couverture des tests
+# ClassLive v0.9.0 — Matrice de couverture des tests
 
 ## Objectif et périmètre
 
@@ -56,7 +56,7 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 | Rate limiting | 5 tentatives max/60 s sur `/auth/login` → 429, reset après fenêtre | `test_edge_cases.py` |
 | Santé enrichie | `/health` vérifie aussi l'accès SQLite (`database: true/false`) | `test_edge_cases.py` |
 | Cas limites | config YAML invalide (tous champs, y compris `session.*`, `audit.*`, `export.*`, `security.trainer_accounts`), contenu > 2 Mo, réponse > 64 Ko, limite 10 000 sessions player, expiration jeton 8 h, compteurs corrompus, caractères de contrôle nom/prénom | `test_edge_cases.py` |
-| Fonctionnalités v0.8.5 | multi-comptes formateurs (login/401/503, audit login_failed), audit (DB + fichier JSON-lines, désactivé, fichier illisible, limites), droit à l'oubli RGPD (cascade, 422, 404, jeton révoqué), export/import ZIP (aller-retour, idempotence, 422/413/404, manifest invalide, ZIP corrompu), duplicate groupe (suffixes, 100 conflits, OSError), versions de slides (cycle, plafond 50, restore, 404), max_students (409, 0=illimité), rétention (purge manuel/startup/désactivé), stats d'usage, Q&A (cycle, limites 1000/50/2000 caractères, 404/409/401), réactions emoji (compteurs, 422, 401), compteur `online` (WS + repli last_seen) | `test_features.py` |
+| Fonctionnalités v0.8.5–v0.9.0 | multi-comptes formateurs (login/401/503, audit login_failed), audit (DB + fichier JSON-lines, désactivé, fichier illisible, limites), droit à l'oubli RGPD (cascade, 422, 404, jeton révoqué), export/import ZIP (aller-retour, idempotence, 422/413/404, manifest invalide, ZIP corrompu), duplicate groupe (suffixes, 100 conflits, OSError), versions de slides (cycle, plafond 50, restore, 404), max_students (409, 0=illimité), rétention (purge manuel/startup/désactivé), stats d'usage, Q&A (cycle, limites 1000/50/2000 caractères, 404/409/401), réactions emoji (compteurs, 422, 401), compteur `online` (WS + repli last_seen) | `test_features.py` |
 | Installation | validité Bash, composants attendus, santé du vrai serveur isolé | `run_suite_complete.sh`, `test_reseau_multiclients.py` |
 
 ## Routes couvertes (OpenAPI)

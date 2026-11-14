@@ -71,6 +71,7 @@ class Auth:
         self.store = store
         self.trainers: dict[str, float] = {}
         self._login_attempts: dict[str, list[float]] = {}
+        self._join_attempts: dict[str, list[float]] = {}
         self._password = cfg.trainer_password
 
     def _check_rate_limit(self, client_ip: str):
@@ -80,6 +81,18 @@ class Auth:
             raise HTTPException(status_code=429, detail='Trop de tentatives de connexion. Réessayez dans une minute.')
         attempts.append(now)
         self._login_attempts[client_ip] = attempts
+
+    def _check_join_rate_limit(self, client_ip: str):
+        """Anti brute-force sur le code à 6 chiffres : limite de joins par minute et par IP."""
+        limit = self.cfg.join_rate_limit
+        if limit <= 0:
+            return
+        now = time.monotonic()
+        attempts = [t for t in self._join_attempts.get(client_ip, []) if now - t < self._LOGIN_WINDOW]
+        if len(attempts) >= limit:
+            raise HTTPException(status_code=429, detail='Trop de tentatives de rejoindre. Réessayez dans une minute.')
+        attempts.append(now)
+        self._join_attempts[client_ip] = attempts
 
     def _check_credentials(self, username: str, password: str) -> bool:
         if self._password and hmac.compare_digest(username, self.cfg.trainer_username) \
@@ -306,7 +319,8 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return store.reset(group,event)
 
     @student_routes.post('/student/join',tags=['Étudiants'])
-    async def join(payload: Join):
+    async def join(payload: Join, request: Request):
+        auth._check_join_rate_limit(request.client.host if request.client else 'unknown')
         nom,prenom=payload.nom.strip(),payload.prenom.strip()
         if not nom or not prenom or any(ord(x)<32 for x in nom+prenom):
             raise HTTPException(status_code=422,detail='Nom et prénom obligatoires et valides.')
