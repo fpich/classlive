@@ -169,7 +169,20 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `GET` | `/live/{live_id}/reactions` | Compteurs d'emoji du Live |
 | `GET` | `/stats/usage` | Statistiques d'usage globales (sessions, participations, questions, réactions, par événement) |
 | `POST` | `/admin/purge` | Purge manuelle des sessions terminées selon `session.retention_days` |
+| `GET` | `/admin/backup.zip` | Archive ZIP complète du workspace (Evts/, classlive.db, audit.log) |
 | `GET` | `/audit?limit=200` | Journal d'audit (max 1000 entrées) |
+| `POST` | `/groups/{group}/events/{event}/media?filename=x.png` | Uploader un média (corps brut, limite `media.max_file_mb`, 413) |
+| `GET` | `/groups/{group}/events/{event}/media` | Lister les médias de l'événement |
+| `DELETE` | `/groups/{group}/events/{event}/media/{filename}` | Supprimer un média |
+| `GET` | `/media/{group}/{event}/{filename}` | Télécharger un média (**public**, référencé dans le Markdown des slides) |
+| `POST` | `/groups/{group}/events/{event}/slides/{slide}/duplicate` | Dupliquer une slide (`new_title` optionnel, numéro max+1) |
+| `GET` | `/groups/{group}/student-results?nom=&prenom=` | Toutes les réponses d'un élève sur **tous les événements** du groupe |
+| `POST` | `/live/start` avec `start_at` | Planifier un Live (ISO 8601 futur) : `scheduled` puis activation auto |
+| `GET` | `/live/scheduled` | Sessions planifiées (non encore démarrées) |
+| `POST` | `/live/{live_id}/announce` | Annonce texte à tous les élèves (persistée + WS `announcement`) |
+| `GET` | `/live/{live_id}/presence.csv` | CSV de présence (statut, rejoint_le, dernière activité, réponses) |
+| `GET` | `/live/{live_id}/questions.csv` | CSV des questions/réponses du Live |
+| `GET` | `/live/{live_id}/reactions.csv` | CSV des compteurs d'emoji |
 | `POST` | `/auth/change-password` | Changer le mot de passe formateur en mémoire (effectif jusqu'au redémarrage ; invalide tous les jetons) |
 | `GET` | `/live/{live_id}/export.csv` | CSV de la session |
 | `GET` | `/groups/{group}/events/{event}/sessions` | Sessions actives et terminées |
@@ -212,7 +225,7 @@ Pour les appels suivants, envoyer `Authorization: Bearer STUDENT_SESSION_ID` :
 | `GET` | `/api/v1/student/questions` | Ses propres questions et les réponses reçues |
 | `POST` | `/api/v1/student/reaction` | Envoyer une réaction emoji (`{"emoji"}`, 8 caractères max), diffusée à tous |
 
-`GET /api/v1/student/current` retourne aussi `online` : le nombre d'élèves actuellement connectés en WebSocket.
+`GET /api/v1/student/current` retourne aussi `online` (nombre d'élèves connectés en WebSocket) et `announcement` (dernière annonce du formateur). `POST /live/start` retourne `join_url` (`/app/join?code=...` si `server.frontend_dir` est configuré, sinon `/join?code=...`).
 
 Exemple de soumission :
 
@@ -224,8 +237,8 @@ Aucune note n’est calculée ; le formateur peut consulter les réponses enregi
 
 ## WebSocket
 
-- `ws://SERVEUR:8080/api/v1/student/ws` : l'étudiant se connecte, envoie **en premier message JSON** `{"token":"STUDENT_SESSION_ID"}` (ne pas transmettre le secret dans l'URL), reçoit `{"event":"current","current":{...}}` et ensuite `slide_changed` / `correction_shown` / `correction_hidden` / `live_ended` / `question_answered` / `reaction`. Envoyer `{"event":"ping"}` toutes les 20 secondes ; réponse `pong`. Une connexion silencieuse depuis plus de 45 secondes est comptée déconnectée.
-- `ws://SERVEUR:8080/api/v1/live/{live_id}/monitor` : le formateur envoie d'abord `{"token":"JETON_FORMATEUR"}`, reçoit `monitor`, puis `student_joined`, `student_connected`, `student_disconnected`, `answer_received`, `question_asked`, `question_updated`, `slide_changed`, `correction_shown`, `correction_hidden`, `live_ended`.
+- `ws://SERVEUR:8080/api/v1/student/ws` : l'étudiant se connecte, envoie **en premier message JSON** `{"token":"STUDENT_SESSION_ID"}` (ne pas transmettre le secret dans l'URL), reçoit `{"event":"current","current":{...}}` et ensuite `slide_changed` / `correction_shown` / `correction_hidden` / `live_ended` / `question_answered` / `reaction` / `announcement`. Envoyer `{"event":"ping"}` toutes les 20 secondes ; réponse `pong`. Une connexion silencieuse depuis plus de 45 secondes est comptée déconnectée.
+- `ws://SERVEUR:8080/api/v1/live/{live_id}/monitor` : le formateur envoie d'abord `{"token":"JETON_FORMATEUR"}`, reçoit `monitor`, puis `student_joined`, `student_connected`, `student_disconnected`, `answer_received`, `question_asked`, `question_updated`, `slide_changed`, `correction_shown`, `correction_hidden`, `live_ended`, `announcement`.
 - Présence en ligne calculée à partir des WebSockets actifs (mémoire du serveur), les participations et leurs dernières activités persistent en SQLite. Après redémarrage du service, les étudiants sont déconnectés jusqu'à reconnexion, sans perte de réponses.
 
 ## Export CSV
@@ -242,18 +255,36 @@ Toutes les fonctionnalités ont des **paramètres par défaut** ; tout ce qui es
 
 ```yaml
 classlive:
+  server:
+    frontend_dir: null           # build du frontend servi sur /app (relatif au workdir ou absolu)
   security:
     trainer_accounts:            # comptes formateurs additionnels (password min 8 caractères)
       - { username: "prof2", password: "mot-de-passe-min-8-car" }
   session:
     max_students: 300            # 0 = illimité ; join au-delà -> 409 "Session pleine"
     retention_days: 365          # purge auto des sessions terminées (0 = désactivé)
+    join_rate_limit: 300         # tentatives de join max/min/IP (0 = désactivé) -> 429
   audit:
     enabled: true                # journal d'audit en SQLite + fichier JSON-lines
     file: null                   # défaut : <workdir>/audit.log
   export:
     max_zip_mb: 50               # taille max d'un export/import ZIP d'événement
+  media:
+    max_file_mb: 10              # taille max d'un média uploadé par événement
 ```
+
+## v0.9.x — Toutes les fonctionnalités restantes (front-ready complet)
+
+- **10 types de slides** : `C` contenu, `Q` QCM, `P` sondage, `A` association, `O` ordre, `R` catégories, `T` texte à trous, `F` **texte libre** (`{"text":...}`, 5000 car, contenu jamais exposé), `N` **nuage de mots** (`{"words":[...]}`, 5 mots de 30 car), `L` **échelle 1-5** (`{"value":3}`). Stats agrégées : options (Q/P), mots (N), distribution (L), simple compteur (F).
+- **Médias par événement** : `POST /groups/{g}/events/{e}/media?filename=schema.png` (corps brut, `media.max_file_mb`, 413 précoce sur `Content-Length`), liste `GET .../media`, `DELETE .../media/{f}`, téléchargement **public** `GET /media/{group}/{event}/{filename}` (référençable dans le Markdown). Copiés avec l'événement dupliqué.
+- **Frontend servi par le backend** : `server.frontend_dir` (relatif au workdir ou absolu) → build servi sur `/app` avec fallback SPA sur `index.html`. `POST /live/start` retourne `join_url` (`/app/join?code=...` si frontend configuré).
+- **Annonce formateur** : `POST /live/{id}/announce` (`{"text"}`, 500 car max), persistée, incluse dans `status` et `student/current`, diffusée en WS (`announcement`).
+- **Planification** : `POST /live/start` avec `start_at` (ISO 8601 futur) → session `scheduled`, `GET /live/scheduled`, join refusé (404) tant que planifiée, activation auto (thread daemon, réarmée au redémarrage), deadline `par_evenement` calculée à l'activation, `stop` annule une planification, `start` en double → 409.
+- **Exports CSV** : `GET /live/{id}/presence.csv` (statut en ligne, rejoint_le, dernière activité, nb réponses), `.../questions.csv`, `.../reactions.csv`.
+- **Résultats élève cross-événements** : `GET /groups/{group}/student-results?nom=&prenom=` agrège toutes les sessions de tous les événements du groupe.
+- **Backup workspace** : `GET /api/v1/admin/backup.zip` (Evts/, classlive.db, audit.log ; restauration = dézipper à la place du workdir service arrêté).
+- **Duplication de slide** : `POST /groups/{g}/events/{e}/slides/{slide}/duplicate` (`new_title` optionnel, `_copie` auto-incrémenté).
+- 80 routes publiques inventoriées, 418 tests, couverture 100 %.
 
 ## v0.9.0 — Release : durcissement et prêt pour le frontend
 

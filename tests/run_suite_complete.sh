@@ -46,7 +46,7 @@ else
   exit "$result"
 fi
 
-echo '[2/6] Tests unitaires + API (inclut inventaire des 68 routes HTTP et sécurité)'
+echo '[2/6] Tests unitaires + API (inclut inventaire des 80 routes HTTP et sécurité)'
 "$PY" -m pytest -q -p no:cacheprovider --disable-warnings --cov=classlive --cov-report=term-missing --cov-fail-under=100
 
 echo '[3/6] Scénario curl intégral sur serveur éphémère'

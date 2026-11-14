@@ -1,25 +1,36 @@
-"""Slides Markdown: SNNN_TYPE_Titre.md, uniques par numéro dans un événement."""
+"""Slides Markdown: SNNN_TYPE_Titre.md, uniques par numéro dans un événement.
+
+Types : C contenu, A association, O ordre, R catégories, Q QCM, T texte à trous,
+F texte libre, P sondage, N nuage de mots, L échelle (Likert 1-5).
+"""
 from __future__ import annotations
 
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 
 from classlive.storage import EventStorage, InvalidName, ResourceConflict, ResourceNotFound, StorageError, normalize_name
 
-SLIDE_TYPES = frozenset({'C', 'A', 'O', 'R', 'Q', 'T'})
-SLIDE_RE = re.compile(r'^S([0-9]{3,})_([CAORQT])_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)\.md$')
+SLIDE_TYPES = frozenset({'C', 'A', 'O', 'R', 'Q', 'T', 'F', 'P', 'N', 'L'})
+SLIDE_RE = re.compile(r'^S([0-9]{3,})_([CAORQTFNPL])_([A-Za-z0-9]+(?:_[A-Za-z0-9]+)*)\.md$')
+# Médias servis publiquement depuis le sous-dossier media/ de l'événement.
+MEDIA_RE = re.compile(r'^[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*\.(png|jpe?g|gif|svg|webp|pdf)$', re.IGNORECASE)
+MEDIA_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+               '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+               '.pdf': 'application/pdf'}
 
 
 class SlideStorage:
-    def __init__(self, events: EventStorage):
+    def __init__(self, events: EventStorage, media_max_bytes: int = 10 * 1024 * 1024):
         self.events = events
+        self.media_max_bytes = media_max_bytes
 
     @staticmethod
     def _type(value: str) -> str:
         if not isinstance(value, str) or value not in SLIDE_TYPES:
-            raise InvalidName('Type de slide invalide : C, A, O, R, Q ou T uniquement.')
+            raise InvalidName('Type de slide invalide : C, A, O, R, Q, T, F, P, N ou L uniquement.')
         return value
 
     @staticmethod
@@ -173,3 +184,88 @@ class SlideStorage:
             except OSError as exc:
                 raise StorageError(f'Impossible de supprimer la slide : {exc}') from exc
             return {'group': g.name, 'event': parent.name, 'slide': path.name, 'deleted': True}
+
+    def duplicate(self, group: str, event: str, slide: str, new_name: str | None = None) -> dict:
+        """Copie une slide vers un nouveau numéro (max+1), même type, titre `_copie` par défaut."""
+        with self.events._lock:
+            g, parent = self._parent(group, event)
+            source = self._resolve(parent, slide)
+            current = SLIDE_RE.fullmatch(source.name)
+            peers = self._slides(parent)
+            num = max((int(SLIDE_RE.fullmatch(p.name).group(1)) for p in peers), default=0) + 1
+            self.events._number(num)
+            base = normalize_name(new_name) if new_name is not None else current.group(3) + '_copie'
+            normalized = base
+            suffix = 1
+            while any(SLIDE_RE.fullmatch(p.name).group(3).casefold() == normalized.casefold() for p in peers):
+                suffix += 1
+                if suffix > 100:
+                    raise ResourceConflict('Impossible de trouver un nom de copie disponible.')
+                normalized = f'{base}_{suffix}'
+            target = parent / f'S{num:03d}_{current.group(2)}_{normalized}.md'
+            self.events._check_no_symlinks(source)
+            try:
+                shutil.copyfile(source, target)
+            except OSError as exc:
+                raise StorageError(f'Impossible de dupliquer la slide : {exc}') from exc
+            return {'group': g.name, 'event': parent.name, 'slide': source.name, 'new_slide': target.name,
+                    'duplicated': True, 'path': str(target)}
+
+    # ── Médias de l'événement (sous-dossier media/, servis publiquement) ────
+
+    def _media_path(self, parent: Path, filename: str) -> Path:
+        if not isinstance(filename, str) or not MEDIA_RE.fullmatch(filename):
+            raise InvalidName('Nom de média invalide (lettres/chiffres/underscore, extension png, jpg, jpeg, gif, svg, webp ou pdf).')
+        return parent / 'media' / filename
+
+    def upload_media(self, group: str, event: str, filename: str, data: bytes) -> dict:
+        with self.events._lock:
+            g, parent = self._parent(group, event)
+            target = self._media_path(parent, filename)
+            if not isinstance(data, (bytes, bytearray)) or not data:
+                raise InvalidName('Fichier vide.')
+            if len(data) > self.media_max_bytes:
+                raise InvalidName(f'Média trop volumineux (max {self.media_max_bytes // 1048576} Mo).')
+            target.parent.mkdir(exist_ok=True)
+            if target.is_symlink():
+                raise StorageError(f'Lien symbolique interdit : {target}')
+            try:
+                with target.open(mode='xb') as f:
+                    f.write(bytes(data))
+            except FileExistsError as exc:
+                raise ResourceConflict('Un média porte déjà ce nom.') from exc
+            except OSError as exc:
+                raise StorageError(f'Impossible d’écrire le média : {exc}') from exc
+            return {'group': g.name, 'event': parent.name, 'file': filename, 'size': len(data),
+                    'uploaded': True, 'path': str(target)}
+
+    def list_media(self, group: str, event: str) -> dict:
+        with self.events._lock:
+            g, parent = self._parent(group, event)
+            d = parent / 'media'
+            if not d.is_dir():
+                files = []
+            else:
+                files = sorted(p.name for p in d.iterdir()
+                               if p.is_file() and not p.is_symlink() and MEDIA_RE.fullmatch(p.name))
+            return {'group': g.name, 'event': parent.name, 'files': files}
+
+    def delete_media(self, group: str, event: str, filename: str) -> dict:
+        with self.events._lock:
+            g, parent = self._parent(group, event)
+            target = self._media_path(parent, filename)
+            if not target.is_file() or target.is_symlink():
+                raise ResourceNotFound('Média introuvable.')
+            try:
+                target.unlink()
+            except OSError as exc:
+                raise StorageError(f'Impossible de supprimer le média : {exc}') from exc
+            return {'group': g.name, 'event': parent.name, 'file': filename, 'deleted': True}
+
+    def media_file(self, group: str, event: str, filename: str) -> Path:
+        """Chemin d'un média existant (pour FileResponse), sans traversal possible."""
+        g, parent = self._parent(group, event)
+        target = self._media_path(parent, filename)
+        if not target.is_file() or target.is_symlink():
+            raise ResourceNotFound('Média introuvable.')
+        return target

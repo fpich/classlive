@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Tests fonctionnels de ClassLive 0.9.0 sur HTTP (sans frontend).
+# Tests fonctionnels de ClassLive 0.9.1 sur HTTP (sans frontend).
 # Le script ne touche qu'aux groupes et événements de test qu'il crée.
 set -Eeuo pipefail
 BASE="${CLASSLIVE_URL:-http://127.0.0.1:8080}"
@@ -37,7 +37,7 @@ req(){
 
 info 'Disponibilité, OpenAPI et documentation Markdown'
 req 200 GET /health public; result
-python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["status"] == "ok" and o["version"] == "0.9.0",o' "$REPLY_FILE" || fail 'Version ClassLive inattendue (0.9.0 requise)' 
+python3 -c 'import json,sys; o=json.load(open(sys.argv[1])); assert o["status"] == "ok" and o["version"] == "0.9.1",o' "$REPLY_FILE" || fail 'Version ClassLive inattendue (0.9.1 requise)' 
 req 200 GET /openapi.json public
 python3 -m json.tool "$REPLY_FILE" >/dev/null || fail 'OpenAPI invalide'
 req 200 GET /api/v1/help public

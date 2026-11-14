@@ -27,6 +27,8 @@ class Settings:
     audit_enabled: bool = True
     audit_file: Path | None = None
     export_max_zip_mb: int = 50
+    frontend_dir: str | None = None  # build du frontend servi sur /app (null = désactivé)
+    media_max_mb: int = 10  # taille max d'un média uploadé par événement
 
     @property
     def events_root(self) -> Path:
@@ -72,6 +74,9 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     host = server.get("host", "0.0.0.0")
     port = server.get("port", 8080)
     level = logging.get("level", "INFO")
+    frontend_dir = server.get('frontend_dir')
+    if frontend_dir is not None and (not isinstance(frontend_dir, str) or not frontend_dir.strip()):
+        raise ValueError('classlive.server.frontend_dir doit être un chemin non vide ou null.')
     api_key = security.get("api_key")
     if not isinstance(host, str) or not host:
         raise ValueError("classlive.server.host invalide.")
@@ -113,6 +118,11 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     if type(export_max_zip_mb) is not int or not 1 <= export_max_zip_mb <= 2048:
         raise ValueError('classlive.export.max_zip_mb doit être un entier entre 1 et 2048.')
 
+    media_cfg = _mapping(config.get('media'), 'media')
+    media_max_mb = media_cfg.get('max_file_mb', 10)
+    if type(media_max_mb) is not int or not 1 <= media_max_mb <= 100:
+        raise ValueError('classlive.media.max_file_mb doit être un entier entre 1 et 100.')
+
     accounts_raw = security.get('trainer_accounts', [])
     if not isinstance(accounts_raw, list):
         raise ValueError('classlive.security.trainer_accounts doit être une liste de {username, password}.')
@@ -129,4 +139,5 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
                     log_level=level.upper(), api_key=api_key, cors_origins=tuple(cors_origins),
                     max_students=max_students, retention_days=retention_days, join_rate_limit=join_rate_limit,
                     audit_enabled=audit_enabled,
-                    audit_file=audit_path if audit_enabled else None, export_max_zip_mb=export_max_zip_mb)
+                    audit_file=audit_path if audit_enabled else None, export_max_zip_mb=export_max_zip_mb,
+                    frontend_dir=frontend_dir, media_max_mb=media_max_mb)

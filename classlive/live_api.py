@@ -4,8 +4,10 @@ from __future__ import annotations
 import asyncio
 import hmac
 import secrets
+import threading
 import time
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -29,6 +31,11 @@ class Begin(BaseModel):
     timing: str = 'none'
     timing_seconds: int | None = None
     correction: str | None = None
+    start_at: str | None = None  # ISO 8601 futur -> session planifiée (scheduled)
+
+
+class TextPayload(BaseModel):
+    text: str
 
 
 class Jump(BaseModel):
@@ -190,6 +197,20 @@ class Hub:
                 sockets.discard(ws)
 
 
+def arm_scheduled(store: LiveStore, live_id: str, started_at: str):
+    """Programme l'activation d'une session planifiée via un thread daemon (réarmable au redémarrage)."""
+    try:
+        delay = datetime.fromisoformat(started_at).timestamp() - time.time()
+    except ValueError:
+        delay = 0
+    if delay <= 0:
+        store.activate(live_id)
+        return
+    timer = threading.Timer(delay, store.activate, args=(live_id,))
+    timer.daemon = True
+    timer.start()
+
+
 def install_live_api(app, cfg: Settings, store: LiveStore):
     auth=Auth(cfg,store)
     hub=Hub()
@@ -219,12 +240,20 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         correction = payload.correction or ('show' if payload.mode == 'live' else 'à_la_fin')
         try:
             result = store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
-                                 timing_seconds=payload.timing_seconds, correction_mode=correction)
+                                 timing_seconds=payload.timing_seconds, correction_mode=correction,
+                                 start_at=payload.start_at)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        result['join_url'] = ('/app/join?code=' if cfg.frontend_dir else '/join?code=') + result['session_code']
+        if result['status'] == 'scheduled':
+            arm_scheduled(store, result['live_id'], result['started_at'])
         store.audit(cfg.trainer_username, 'live_start',
-                    f"{result['group']}/{result['event']} mode={payload.mode} code={result['session_code']}")
+                    f"{result['group']}/{result['event']} mode={payload.mode} code={result['session_code']} status={result['status']}")
         return result
+
+    @trainer_routes.get('/live/scheduled', tags=['Live formateur'])
+    def scheduled_lives():
+        return store.scheduled()
 
     async def movement(lid,direction,number=None):
         result=store.move(lid,direction,number)
@@ -425,6 +454,42 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
     def list_reactions(live_id: str):
         return store.reactions(live_id)
 
+    # ── Annonce du formateur (persistée + diffusée à tous en WS) ───────────
+
+    @trainer_routes.post('/live/{live_id}/announce',tags=['Live formateur'])
+    async def announce(live_id: str, payload: TextPayload):
+        try:
+            result=store.announce(live_id,payload.text)
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        await hub.publish(live_id,{'event':'announcement','text':result['text']})
+        return {'success':True,**result}
+
+    # ── Exports CSV complémentaires ────────────────────────────────────────
+
+    def csv_response(content: str, filename: str) -> Response:
+        return Response(content, media_type='text/csv; charset=utf-8',
+                        headers={'Content-Disposition': f'attachment; filename="{filename}"'})
+
+    @trainer_routes.get('/live/{live_id}/presence.csv',tags=['Résultats'])
+    def presence_csv(live_id: str):
+        return csv_response(store.presence_csv(live_id), 'classlive_presence.csv')
+
+    @trainer_routes.get('/live/{live_id}/questions.csv',tags=['Résultats'])
+    def questions_csv(live_id: str):
+        return csv_response(store.questions_csv(live_id), 'classlive_questions.csv')
+
+    @trainer_routes.get('/live/{live_id}/reactions.csv',tags=['Résultats'])
+    def reactions_csv(live_id: str):
+        return csv_response(store.reactions_csv(live_id), 'classlive_reactions.csv')
+
+    @trainer_routes.get('/groups/{group}/student-results',tags=['Résultats'])
+    def group_student_results(group: str, nom: str | None = None, prenom: str | None = None):
+        """Toutes les réponses d'un élève sur tous les événements du groupe."""
+        if not nom or not prenom:
+            raise HTTPException(status_code=422, detail='Paramètres nom et prenom obligatoires.')
+        return store.group_student_results(group, nom.strip(), prenom.strip())
+
     async def authorize_ws(ws: WebSocket, trainer: bool):
         await ws.accept()
         try:
@@ -499,4 +564,8 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
 
     app.include_router(student_routes)
     app.include_router(trainer_routes)
+
+    # Réarmement des sessions planifiées après redémarrage du service.
+    for s in store.scheduled()['scheduled']:
+        arm_scheduled(store, s['id'], s['started_at'])
     return auth

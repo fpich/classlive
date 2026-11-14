@@ -46,7 +46,24 @@ classlive_answer:
 - C : Marseille
 ```
 
-Le `classlive_answer` du frontmatter YAML n'est jamais inclus dans la question diffusée avant l'autorisation du formateur. Les réponses possibles suivent la convention du type d'exercice : `selected`, `pairs`, `order`, `categories` ou `blanks`. Aucun point ni score n'est calculé.
+Le `classlive_answer` du frontmatter YAML n'est jamais inclus dans la question diffusée avant l'autorisation du formateur. Les réponses possibles suivent la convention du type d'exercice : `selected` (Q QCM, P sondage), `pairs` (A), `order` (O), `categories` (R), `blanks` (T texte à trous), `text` (F texte libre), `words` (N nuage de mots, 1 à 5 mots), `value` (L échelle 1 à 5). Aucun point ni score n'est calculé.
+
+## 3bis. Types de slides
+
+| Lettre | Type | Réponse attendue |
+|---|---|---|
+| `C` | Contenu | aucune (pas un exercice) |
+| `Q` | QCM | `{"selected":["B"]}` (avec ou sans corrigé) |
+| `P` | Sondage | `{"selected":["A"]}` (jamais de corrigé) |
+| `A` | Association | `{"pairs":{...}}` |
+| `O` | Ordre | `{"order":["C","A"]}` |
+| `R` | Catégories | `{"categories":{...}}` |
+| `T` | Texte à trous | `{"blanks":[...]}` |
+| `F` | Texte libre | `{"text":"..."}` (5000 car max, contenu jamais exposé dans les stats) |
+| `N` | Nuage de mots | `{"words":["mot",...]}` (1 à 5 mots de 30 car max) |
+| `L` | Échelle 1-5 | `{"value":3}` |
+
+Les médias (images, PDF) se placent dans le sous-dossier `media/` de l'événement (upload via `POST /api/v1/groups/{g}/events/{e}/media?filename=...`) et sont servis publiquement sur `/media/{g}/{e}/{fichier}` pour être référencés dans le Markdown.
 
 Une slide exercice peut ne pas avoir de `classlive_answer` : les réponses restent enregistrables, mais l'affichage de correction renverra HTTP 409.
 

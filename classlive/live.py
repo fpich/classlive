@@ -20,7 +20,7 @@ import yaml
 from classlive.slides import SLIDE_RE, SlideStorage
 from classlive.storage import ResourceConflict, ResourceNotFound
 
-EXERCISES = set('AORQT')
+EXERCISES = set('AORQTFNPL')
 
 logger = logging.getLogger("classlive")
 
@@ -137,6 +137,7 @@ class LiveStore:
                 ('timing_seconds', "INTEGER"),
                 ('correction_mode', "TEXT NOT NULL DEFAULT 'show'"),
                 ('deadline', "TEXT"),
+                ('announcement', "TEXT"),
             ):
                 if col not in columns:
                     con.execute(f'ALTER TABLE live_sessions ADD COLUMN {col} {ddl}')
@@ -172,10 +173,23 @@ class LiveStore:
         return self.fail_if_missing(con.execute('SELECT * FROM participations WHERE id=?', (pid,)).fetchone(), 'Participation')
 
     def start(self, group: str, event: str, mode: str = 'live', timing: str = 'none',
-              timing_seconds: int | None = None, correction_mode: str = 'show') -> dict:
-        """Démarre une session. mode='live' (formateur pilote) ou 'autonome' (élèves à leur rythme)."""
+              timing_seconds: int | None = None, correction_mode: str = 'show',
+              start_at: str | None = None) -> dict:
+        """Démarre une session. mode='live' (formateur pilote) ou 'autonome' (élèves à leur rythme).
+        start_at (ISO 8601, futur) planifie la session : status='scheduled' jusqu'à l'activation."""
         if mode not in ('live', 'autonome'):
             raise ValueError("mode doit être 'live' ou 'autonome'.")
+        scheduled_at = None
+        if start_at is not None:
+            try:
+                planned = datetime.fromisoformat(start_at)
+            except ValueError as exc:
+                raise ValueError('start_at doit être une date ISO 8601 (ex. 2026-01-01T14:00:00+01:00).') from exc
+            if planned.tzinfo is None:
+                planned = planned.replace(tzinfo=timezone.utc)
+            if planned.timestamp() <= time.time() + 1:
+                raise ValueError('start_at doit être dans le futur (au moins 1 seconde).')
+            scheduled_at = planned.isoformat()
         if mode == 'autonome':
             if timing not in ('none', 'par_question', 'par_evenement'):
                 raise ValueError("timing doit être 'none', 'par_question' ou 'par_evenement'.")
@@ -202,23 +216,26 @@ class LiveStore:
                 prepared.append((number, path.name, kind, content, json.dumps(key, ensure_ascii=False) if key is not None else None))
             lid = str(uuid.uuid4())
             with self.db() as con:
-                if con.execute("SELECT 1 FROM live_sessions WHERE group_name=? AND event_name=? AND status='running'", (g.name, parent.name)).fetchone():
-                    raise ResourceConflict('Une session est déjà active sur cet événement.')
+                if con.execute("SELECT 1 FROM live_sessions WHERE group_name=? AND event_name=? AND status IN ('running','scheduled')", (g.name, parent.name)).fetchone():
+                    raise ResourceConflict('Une session est déjà active ou planifiée sur cet événement.')
                 for _ in range(30):
                     code = f'{secrets.randbelow(1000000):06d}'
                     if not con.execute('SELECT 1 FROM live_sessions WHERE code=?', (code,)).fetchone():
                         break
                 else:
                     raise ResourceConflict('Aucun code Live disponible.')
+                # En planification, la deadline par_evenement n'est calculée qu'à l'activation.
                 deadline = None
-                if mode == 'autonome' and timing == 'par_evenement':
+                if mode == 'autonome' and timing == 'par_evenement' and scheduled_at is None:
                     deadline = datetime.fromtimestamp(time.time() + timing_seconds, timezone.utc).isoformat()
+                status = 'scheduled' if scheduled_at is not None else 'running'
                 con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number,mode,timing,timing_seconds,correction_mode,deadline) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-                            (lid, code, g.name, parent.name, now(), 'running', prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline))
+                            (lid, code, g.name, parent.name, scheduled_at or now(), status, prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline))
                 con.executemany('INSERT INTO snapshots(live_id,number,filename,kind,public_content,answer_key) VALUES (?,?,?,?,?,?)',
                                 [(lid, *row) for row in prepared])
             return {'live_id': lid, 'session_code': code, 'group': g.name, 'event': parent.name, 'current_slide': prepared[0][1],
-                    'status': 'running', 'mode': mode, 'timing': timing, 'timing_seconds': timing_seconds, 'correction_mode': correction_mode}
+                    'status': status, 'started_at': scheduled_at or now(), 'mode': mode, 'timing': timing,
+                    'timing_seconds': timing_seconds, 'correction_mode': correction_mode}
 
     def state(self, lid: str, include_content: bool = False):
         with self.db() as con:
@@ -231,6 +248,7 @@ class LiveStore:
                       'total': len(slides), 'revision': session['revision'],
                       'timing': session['timing'], 'timing_seconds': session['timing_seconds'],
                       'correction_mode': session['correction_mode'], 'deadline': session['deadline'],
+                      'announcement': session['announcement'],
                       'correction_visible': bool(session['correction_visible']) if current['kind'] in EXERCISES else False}
             if include_content:
                 result['content'] = current['public_content']
@@ -260,6 +278,16 @@ class LiveStore:
             con.execute('UPDATE live_sessions SET current_number=?,correction_visible=0,revision=revision+1 WHERE id=?', (target,lid))
         return self.state(lid, include_content=True)
 
+    def announce(self, lid: str, text: str):
+        """Annonce textuelle du formateur, persistée et diffusée à tous (WS)."""
+        if not isinstance(text, str) or not text.strip() or len(text) > 500:
+            raise ValueError('Annonce requise (500 caractères max).')
+        with self.lock, self.db() as con:
+            self._live(con, lid)
+            con.execute('UPDATE live_sessions SET announcement=?, revision=revision+1 WHERE id=?', (text.strip(), lid))
+        self.audit('formateur', 'announce', f'live_id={lid} ({len(text.strip())} car)')
+        return {'announced': True, 'live_id': lid, 'text': text.strip()}
+
     def correction(self, lid: str, show: bool):
         """Seul le formateur active l'affichage du corrigé de la slide courante."""
         with self.lock, self.db() as con:
@@ -275,10 +303,29 @@ class LiveStore:
             con.execute('UPDATE live_sessions SET correction_visible=?,revision=revision+1 WHERE id=?', (int(show), lid))
         return self.state(lid, include_content=True)
 
+    def activate(self, lid: str):
+        """Passe une session planifiée (scheduled) en running. Sans effet sinon."""
+        with self.lock, self.db() as con:
+            session = self._live(con, lid)
+            if session['status'] != 'scheduled':
+                return {'activated': False, 'live_id': lid, 'status': session['status']}
+            deadline = session['deadline']
+            if session['mode'] == 'autonome' and session['timing'] == 'par_evenement' and session['timing_seconds']:
+                deadline = datetime.fromtimestamp(time.time() + session['timing_seconds'], timezone.utc).isoformat()
+            con.execute("UPDATE live_sessions SET status='running', deadline=?, revision=revision+1 WHERE id=? AND status='scheduled'",
+                        (deadline, lid))
+        return {'activated': True, 'live_id': lid, 'status': 'running'}
+
+    def scheduled(self):
+        """Sessions planifiées (avec leur heure prévue en started_at)."""
+        with self.db() as con:
+            rows = con.execute("SELECT id,code,group_name,event_name,started_at,mode FROM live_sessions WHERE status='scheduled' ORDER BY started_at").fetchall()
+        return {'scheduled': [dict(r) for r in rows]}
+
     def stop(self, lid: str):
         with self.lock, self.db() as con:
             session = self._live(con, lid)
-            if session['status'] == 'running':
+            if session['status'] in ('running', 'scheduled'):
                 con.execute("UPDATE live_sessions SET status='ended',ended_at=?,revision=revision+1 WHERE id=?", (now(),lid))
                 if session['mode'] == 'autonome':
                     # Verrouille la position de chaque élève non terminé.
@@ -392,7 +439,7 @@ class LiveStore:
                       'group': live['group_name'], 'event': live['event_name'],
                       'slide': snap['filename'], 'slide_type': snap['kind'], 'number': number,
                       'position': i + 1, 'total': len(numbers), 'revision': live['revision'],
-                      'online': online,
+                      'online': online, 'announcement': live['announcement'],
                       'content': snap['public_content'], 'finished': bool(finished)}
             if live['mode'] == 'autonome':
                 result['locked'] = locked
@@ -498,6 +545,28 @@ class LiveStore:
                     'finished_at': prog['finished_at'], 'total_slides': len(snaps), 'answered': sum(1 for e in slides_out if e['answered']),
                     'slides': slides_out}
 
+    @staticmethod
+    def _validate_answer(kind: str, answer: dict):
+        """Validation de forme pour les nouveaux types F/P/N/L (les types historiques restent permissifs)."""
+        if kind == 'F':  # texte libre
+            text = answer.get('text')
+            if not isinstance(text, str) or not text.strip() or len(text) > 5000:
+                raise ValueError('Réponse texte requise (5000 caractères max).')
+        elif kind == 'P':  # sondage : un choix parmi la liste
+            selected = answer.get('selected')
+            if not isinstance(selected, list) or not selected \
+                    or any(not isinstance(o, str) or not o.strip() or len(o) > 50 for o in selected):
+                raise ValueError('Sondage : selected doit être une liste non vide d’options (50 car max).')
+        elif kind == 'N':  # nuage de mots : 1 à 5 mots de 30 car max
+            words = answer.get('words')
+            if not isinstance(words, list) or not 1 <= len(words) <= 5 \
+                    or any(not isinstance(w, str) or not w.strip() or len(w) > 30 for w in words):
+                raise ValueError('Nuage de mots : 1 à 5 mots de 30 caractères max.')
+        elif kind == 'L':  # échelle de Likert 1 à 5
+            value = answer.get('value')
+            if type(value) is not int or not 1 <= value <= 5:
+                raise ValueError('Échelle : value doit être un entier entre 1 et 5.')
+
     def submit(self, student, answer: object):
         if not isinstance(answer, dict):
             raise ValueError('La réponse doit être un objet JSON.')
@@ -530,6 +599,7 @@ class LiveStore:
             data = json.dumps(answer, ensure_ascii=False, separators=(',',':'))
             if len(data.encode('utf-8')) > 65536:
                 raise ValueError('Réponse trop volumineuse (64 Ko maximum).')
+            self._validate_answer(snap['kind'], answer)
             stamp = now()
             con.execute('INSERT INTO submissions(participation_id,slide_number,answer_json,submitted_at) VALUES (?,?,?,?)',
                         (student['id'],snap['number'],data,stamp))
@@ -616,7 +686,7 @@ class LiveStore:
                     'WHERE p.live_id=? AND s.slide_number=?', (lid, snap['number'])).fetchall()
                 entry = {'number': snap['number'], 'slide': snap['filename'], 'slide_type': snap['kind'],
                          'answered': len(rows), 'total_students': total_students}
-                if snap['kind'] == 'Q':
+                if snap['kind'] in ('Q', 'P'):
                     options: dict[str, int] = {}
                     for row in rows:
                         answer = json.loads(row['answer_json'])
@@ -624,14 +694,32 @@ class LiveStore:
                             for opt in answer.get('selected', []):
                                 options[opt] = options.get(opt, 0) + 1
                     entry['options'] = options
+                elif snap['kind'] == 'N':
+                    words: dict[str, int] = {}
+                    for row in rows:
+                        answer = json.loads(row['answer_json'])
+                        if isinstance(answer, dict):
+                            for w in answer.get('words', []):
+                                words[w] = words.get(w, 0) + 1
+                    entry['words'] = words
+                elif snap['kind'] == 'L':
+                    values: dict[str, int] = {}
+                    for row in rows:
+                        answer = json.loads(row['answer_json'])
+                        if isinstance(answer, dict) and type(answer.get('value')) is int:
+                            key = str(answer['value'])
+                            values[key] = values.get(key, 0) + 1
+                    entry['values'] = values
+                # F (texte libre) : seul le nombre de réponses est exposé, jamais le contenu.
                 slides_stats.append(entry)
         if all_slides:
             return {'live_id': lid, 'slides': slides_stats}
         s = slides_stats[0]
         result = {'live_id': lid, 'slide': s['slide'], 'slide_type': s['slide_type'],
                   'answered': s['answered'], 'total_students': s['total_students']}
-        if 'options' in s:
-            result['options'] = s['options']
+        for key in ('options', 'words', 'values'):
+            if key in s:
+                result[key] = s[key]
         return result
 
     def student_results(self, group, event, nom, prenom):
@@ -701,6 +789,47 @@ class LiveStore:
     def event_csv(self, group,event):
         found=self.sessions(group,event)
         return self.csv([s['id'] for s in found['sessions']])
+
+    def presence_csv(self, lid):
+        """CSV de présence : qui s'est inscrit, quand, dernière activité, statut en ligne."""
+        st = self.students(lid)
+        output = io.StringIO(newline='')
+        writer = csv.writer(output, delimiter=';')
+        writer.writerow(['live_id','nom','prenom','statut','rejoint_le','derniere_activite','reponses'])
+        for s in st['students']:
+            writer.writerow([lid, s['nom'], s['prenom'], s['status'], s['joined_at'], s['last_seen'], s['answered']])
+        return '\ufeff' + output.getvalue()
+
+    def questions_csv(self, lid):
+        q = self.list_questions(lid)
+        output = io.StringIO(newline='')
+        writer = csv.writer(output, delimiter=';')
+        writer.writerow(['live_id','question_id','nom','prenom','question','repondu','reponse','date_question','date_reponse'])
+        for r in q['questions']:
+            writer.writerow([lid, r['id'], r['nom'], r['prenom'], r['text'], int(r['answered']),
+                             r['answer_text'] or '', r['asked_at'], r['answered_at'] or ''])
+        return '\ufeff' + output.getvalue()
+
+    def reactions_csv(self, lid):
+        r = self.reactions(lid)
+        output = io.StringIO(newline='')
+        writer = csv.writer(output, delimiter=';')
+        writer.writerow(['live_id','emoji','nombre'])
+        for emoji, n in r['counts'].items():
+            writer.writerow([lid, emoji, n])
+        return '\ufeff' + output.getvalue()
+
+    def group_student_results(self, group, nom, prenom):
+        """Toutes les réponses d'un élève (nom+prénom) sur tous les événements du groupe."""
+        g = self.slides.events._group(group)
+        events = self.slides.events.list_events(g.name) or []
+        per_event = []
+        total = 0
+        for ev in events:
+            r = self.student_results(g.name, ev, nom, prenom)
+            total += r['total_answers']
+            per_event.append({'event': r['event'], 'sessions': r['sessions'], 'total_answers': r['total_answers']})
+        return {'group': g.name, 'nom': nom, 'prenom': prenom, 'events': per_event, 'total_answers': total}
 
     def delete(self,lid):
         with self.lock,self.db() as con:

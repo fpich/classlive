@@ -6,17 +6,21 @@ import json
 import logging
 import time
 import zipfile
+from datetime import datetime, timezone
 from importlib.resources import files
+from pathlib import Path
+from stat import S_ISREG
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from classlive import __version__
 from classlive.config import Settings, load_settings
 from classlive.storage import EVENT_RE, EventStorage, InvalidName, ResourceConflict, ResourceNotFound, StorageError
-from classlive.slides import SLIDE_RE, SlideStorage
+from classlive.slides import MEDIA_TYPES, SLIDE_RE, SlideStorage
 from classlive.navigation import SlideNavigator
 from classlive.live import LiveStore
 from classlive.live_api import install_live_api
@@ -45,7 +49,7 @@ class RenameRequest(BaseModel):
 
 class SlideRequest(BaseModel):
     title: str = Field(min_length=1, max_length=150)
-    slide_type: str = Field(pattern=r"^[CAORQT]$")
+    slide_type: str = Field(pattern=r"^[CAORQTFNPL]$")
     content: str = ""
     number: int | None = Field(default=None, ge=1, le=999999, strict=True)
 
@@ -53,7 +57,7 @@ class SlideRequest(BaseModel):
 class SlideRenameRequest(BaseModel):
     new_name: str | None = Field(default=None, min_length=1, max_length=150)
     new_number: int | None = Field(default=None, ge=1, le=999999, strict=True)
-    new_type: str | None = Field(default=None, pattern=r"^[CAORQT]$")
+    new_type: str | None = Field(default=None, pattern=r"^[CAORQTFNPL]$")
 
     @model_validator(mode="after")
     def require_change(self):
@@ -81,10 +85,20 @@ class EventResult(GroupResult):
     title: str
 
 
+class SPAStaticFiles(StaticFiles):
+    """Sert le build du frontend sur /app avec fallback sur index.html (routes client)."""
+
+    async def get_response(self, path, scope):
+        full_path, stat_result = self.lookup_path(path)
+        if stat_result is not None and S_ISREG(stat_result.st_mode):
+            return await super().get_response(path, scope)
+        return await super().get_response("index.html", scope)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     cfg = settings or load_settings()
     storage = EventStorage(cfg.workdir, cfg.events_dir)
-    slides = SlideStorage(storage)
+    slides = SlideStorage(storage, media_max_bytes=cfg.media_max_mb * 1024 * 1024)
     navigator = SlideNavigator(slides)
     # Sans load_settings (Settings construit à la main), audit_file vaut None : repli par défaut.
     audit_file = cfg.audit_file if cfg.audit_file is not None else (cfg.workdir / "audit.log" if cfg.audit_enabled else None)
@@ -260,7 +274,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             slides_infos = manifest.get("slides")
             if not isinstance(slides_infos, list) or not slides_infos \
                     or any(not isinstance(s, str) or not SLIDE_RE.fullmatch(s) for s in slides_infos):
-                raise HTTPException(status_code=422, detail="manifest.json : liste de slides Sxxx_[CAORQT]_*.md requise.")
+                raise HTTPException(status_code=422, detail="manifest.json : liste de slides Sxxx_[CAORQTFNPL]_*.md requise.")
             for name in slides_infos:
                 if name not in names:
                     raise HTTPException(status_code=422, detail=f"Slide {name} absente du ZIP.")
@@ -369,9 +383,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """Purge manuelle des sessions terminées selon la rétention configurée."""
         return live.purge(cfg.retention_days)
 
+    @router.get("/admin/backup.zip", tags=["Système"])
+    def backup_zip():
+        """Archive ZIP complète du workspace (Evts/, classlive.db, audit.log, guide)."""
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for p in sorted(cfg.workdir.rglob("*")):
+                if p.is_symlink():
+                    continue
+                if p.is_file():
+                    zf.write(p, p.relative_to(cfg.workdir))
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        logger.info("Backup ZIP du workspace (%d fichiers)", len(zipfile.ZipFile(io.BytesIO(buffer.getvalue())).namelist()))
+        live.audit("formateur", "backup", "workspace archivé en ZIP")
+        return Response(content=buffer.getvalue(), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="classlive_backup_{stamp}.zip"'})
+
     @router.get("/audit", tags=["Système"])
     def audit_log(limit: int = Query(default=200, ge=1, le=1000)):
         return live.audit_list(limit)
+
+    # ── Médias de l'événement (upload en corps brut, téléchargement public sur /media/...) ──
+
+    @router.post("/groups/{group}/events/{event}/media", tags=["Médias"], status_code=200)
+    async def upload_media(group: str, event: str, request: Request, filename: str = Query(min_length=1, max_length=150)):
+        limit = cfg.media_max_mb * 1024 * 1024
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                if int(content_length) > limit:
+                    raise HTTPException(status_code=413, detail=f"Média trop volumineux (max {cfg.media_max_mb} Mo).")
+            except ValueError:
+                raise HTTPException(status_code=422, detail="En-tête Content-Length invalide.") from None
+        data = await request.body()
+        if not data:
+            raise HTTPException(status_code=422, detail="Fichier vide.")
+        if len(data) > limit:
+            raise HTTPException(status_code=413, detail=f"Média trop volumineux (max {cfg.media_max_mb} Mo).")
+        result = slides.upload_media(group, event, filename, data)
+        logger.info("Média uploadé : %s/%s/%s (%d octets)", result["group"], result["event"], filename, len(data))
+        return {"success": True, **result}
+
+    @router.get("/groups/{group}/events/{event}/media", tags=["Médias"])
+    def list_media(group: str, event: str):
+        return slides.list_media(group, event)
+
+    @router.delete("/groups/{group}/events/{event}/media/{filename}", tags=["Médias"])
+    def delete_media(group: str, event: str, filename: str):
+        return {"success": True, **slides.delete_media(group, event, filename)}
+
+    @router.post("/groups/{group}/events/{event}/slides/{slide}/duplicate", tags=["Slides"])
+    def duplicate_slide(group: str, event: str, slide: str, payload: DuplicateRequest | None = None):
+        result = slides.duplicate(group, event, slide, payload.new_title if payload else None)
+        logger.info("Slide dupliquée : %s/%s/%s -> %s", result["group"], result["event"], result["slide"], result["new_slide"])
+        return {"success": True, **result}
 
     # Lecteur séquentiel : chaque session client a sa propre position.
     @router.post("/player/select", tags=["Lecture"])
@@ -397,4 +462,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(router, prefix="/api/v1")
     # Alias compatible avec le contrat initial /api/events.
     app.include_router(router, prefix="/api", include_in_schema=False)
+
+    # Médias des événements servis publiquement (référencés dans le Markdown des slides).
+    @app.get("/media/{group}/{event}/{filename}", tags=["Médias"])
+    def media_download(group: str, event: str, filename: str):
+        path = slides.media_file(group, event, filename)
+        return FileResponse(path, media_type=MEDIA_TYPES[path.suffix.lower()])
+
+    # Build du frontend servi sur /app quand server.frontend_dir est configuré.
+    if cfg.frontend_dir is not None:
+        frontend_path = Path(cfg.frontend_dir).expanduser()
+        if not frontend_path.is_absolute():
+            frontend_path = cfg.workdir / frontend_path
+        if frontend_path.is_dir():
+            app.mount("/app", SPAStaticFiles(directory=str(frontend_path), html=True), name="frontend")
+            logger.info("Frontend statique servi sur /app depuis %s", frontend_path)
     return app

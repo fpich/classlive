@@ -1,8 +1,8 @@
-# ClassLive v0.9.0 — Matrice de couverture des tests
+# ClassLive v0.9.1 — Matrice de couverture des tests
 
 ## Objectif et périmètre
 
-Les **68 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
+Les **80 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
 
 Le test d'inventaire `test_inventaire_openapi_et_websockets` échoue si une route apparaît/disparaît sans être ajoutée à la matrice des tests. Le test `test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant` essaie systématiquement chaque route protégée en étant anonyme et étudiant. La suite n'utilise **ni le port 8080, ni `/etc/classlive`, ni le workspace réel**.
 
@@ -37,11 +37,11 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 | Authentification | mot de passe correct/incorrect, absence de mot de passe, `X-API-Key`, jeton étudiant interdit sur toutes les routes formateur, jeton formateur interdit sur les routes étudiant | `test_contrat_exhaustif.py`, `test_live.py`, `test_classlive_curl.sh` |
 | Groupes | CRUD, normalisation, apostrophes/accents/espaces, numérotation globale, conflits, réutilisation des numéros, redémarrage, suppression récursive | `test_api.py`, `test_mutations.py`, `test_numbers.py`, `test_classlive_curl.sh` |
 | Événements | CRUD, unicité `Exxx` par groupe, arborescence, renommages, protection contre suppression des archives, redémarrage | `test_api.py`, `test_mutations.py`, `test_numbers.py`, `test_classlive_curl.sh` |
-| Slides | six types `C/A/O/R/Q/T`, `Sxxx`, unicité par événement, création idempotente, lecture/édition/renommage/suppression, numéros sautés, liens symboliques, noms interdits | `test_slides.py`, `test_navigation.py`, `test_classlive_curl.sh` |
+| Slides | dix types `C/A/O/R/Q/T/F/P/N/L`, `Sxxx`, unicité par événement, création idempotente, lecture/édition/renommage/suppression, numéros sautés, liens symboliques, noms interdits | `test_slides.py`, `test_navigation.py`, `test_classlive_curl.sh` |
 | Lecteur indépendant | sélectionner, suivant/précédent, limites, fermer, 404 après fermeture | `test_navigation.py`, `test_classlive_curl.sh` |
 | Live | start/stop/status, second Live refusé, navigation, goto, limites, snapshot immuable, archive, réutilisation | `test_live.py`, `test_correction_help.py`, `test_classlive_curl.sh`, `test_reseau_multiclients.py` |
 | Étudiants | join avec code et identité, erreurs, deux homonymes distincts, reconnexion par jeton, cloisonnement entre Live, révocation après stop | `test_live.py`, `test_contrat_exhaustif.py`, `test_reseau_multiclients.py` |
-| Exercices | réponses des cinq types, JSON structuré, limite 64 Kio, historique des modifications, dernière réponse affichée, aucune note/point | `test_contrat_exhaustif.py`, `test_live.py`, `test_classlive_curl.sh` |
+| Exercices | réponses des 9 types d’exercice, JSON structuré, limite 64 Kio, historique des modifications, dernière réponse affichée, aucune note/point | `test_contrat_exhaustif.py`, `test_live.py`, `test_classlive_curl.sh` |
 | Corrigés | format Markdown YAML, absence de fuite, show/hide exclusivement formateur, 409 si aucun corrigé, désactivation des réponses, erreurs YAML = 422 | `test_correction_help.py`, `test_contrat_exhaustif.py`, `test_classlive_curl.sh`, `test_reseau_multiclients.py` |
 | Résultats et CSV | identité et participation, export session/événement, BOM UTF-8, séparateur `;`, données JSON, sans points, archive et suppression | `test_correction_help.py`, `test_live.py`, `test_contrat_exhaustif.py`, `test_classlive_curl.sh`, `test_reseau_multiclients.py` |
 | Stats agrégées | `GET /live/{id}/stats` : décompte par option pour QCM, total seul pour les autres types, aucune identité, 401 sans jeton, 404 Live inconnu ; `?all=1` pour toutes les slides | `test_edge_cases.py`, `test_front_ready.py` |
@@ -56,6 +56,7 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 | Rate limiting | 5 tentatives max/60 s sur `/auth/login` → 429, reset après fenêtre | `test_edge_cases.py` |
 | Santé enrichie | `/health` vérifie aussi l'accès SQLite (`database: true/false`) | `test_edge_cases.py` |
 | Cas limites | config YAML invalide (tous champs, y compris `session.*`, `audit.*`, `export.*`, `security.trainer_accounts`), contenu > 2 Mo, réponse > 64 Ko, limite 10 000 sessions player, expiration jeton 8 h, compteurs corrompus, caractères de contrôle nom/prénom | `test_edge_cases.py` |
+| Fonctionnalités v0.9.x (front-ready) | 10 types de slides (F/P/N/L : validation 422 des formes, stats options/mots/values, verrouillage autonome), médias (upload 413/422/409/500, symlink, listing, download public, copie avec événement dupliqué), frontend statique /app (fallback SPA, fichier servi, absent/non configuré, chemin absolu), annonce (persistée, WS, 422/404, audit), planification (start_at invalide/passé/futur, join 404, activation auto, réarmement au redémarrage, stop annule, 409 double, deadline autonome à l'activation, arm_scheduled date invalide/passée), exports presence/questions/reactions.csv (contenus + 404), student-results cross-événements (422/404), backup.zip (contenu, symlink exclu, audit), duplicate slide (copie, suffixes, 100 conflits, OSError) | `test_v10_features.py` |
 | Fonctionnalités v0.8.5–v0.9.0 | multi-comptes formateurs (login/401/503, audit login_failed), audit (DB + fichier JSON-lines, désactivé, fichier illisible, limites), droit à l'oubli RGPD (cascade, 422, 404, jeton révoqué), export/import ZIP (aller-retour, idempotence, 422/413/404, manifest invalide, ZIP corrompu), duplicate groupe (suffixes, 100 conflits, OSError), versions de slides (cycle, plafond 50, restore, 404), max_students (409, 0=illimité), rétention (purge manuel/startup/désactivé), stats d'usage, Q&A (cycle, limites 1000/50/2000 caractères, 404/409/401), réactions emoji (compteurs, 422, 401), compteur `online` (WS + repli last_seen) | `test_features.py` |
 | Installation | validité Bash, composants attendus, santé du vrai serveur isolé | `run_suite_complete.sh`, `test_reseau_multiclients.py` |
 

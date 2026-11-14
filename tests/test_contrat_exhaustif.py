@@ -16,7 +16,7 @@ from classlive.api import create_app
 from classlive.config import Settings
 
 
-# 68 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
+# 80 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
 # Chaque route dispose en plus d'un scénario fonctionnel dans les tests historiques,
 # dans les nouveaux tests de ce fichier, ou dans test_reseau_multiclients.py.
 PUBLIC_ROUTES = {
@@ -60,6 +60,10 @@ PUBLIC_ROUTES = {
     ('GET', '/api/v1/events'),
     ('POST', '/api/v1/groups/{group}/events/{event}/duplicate'),
     ('POST', '/api/v1/groups/{group}/duplicate'),
+    ('POST', '/api/v1/groups/{group}/events/{event}/media'),
+    ('GET', '/api/v1/groups/{group}/events/{event}/media'),
+    ('DELETE', '/api/v1/groups/{group}/events/{event}/media/{filename}'),
+    ('GET', '/media/{group}/{event}/{filename}'),
     ('DELETE', '/api/v1/groups/{group}/events/{event}/students-data'),
     ('GET', '/api/v1/groups/{group}/events/{event}/export.zip'),
     ('POST', '/api/v1/groups/{group}/import.zip'),
@@ -73,16 +77,24 @@ PUBLIC_ROUTES = {
     ('PATCH', '/api/v1/groups/{group}/events/{event}/slides/{slide}'),
     ('DELETE', '/api/v1/groups/{group}/events/{event}/slides/{slide}'),
     ('PUT', '/api/v1/groups/{group}/events/{event}/slides/{slide}/content'),
+    ('POST', '/api/v1/groups/{group}/events/{event}/slides/{slide}/duplicate'),
     ('GET', '/api/v1/groups/{group}/events/{event}/slides/{slide}/versions'),
     ('GET', '/api/v1/groups/{group}/events/{event}/slides/{slide}/versions/{vid}'),
     ('POST', '/api/v1/groups/{group}/events/{event}/slides/{slide}/versions/{vid}/restore'),
     ('GET', '/api/v1/stats/usage'),
     ('POST', '/api/v1/admin/purge'),
+    ('GET', '/api/v1/admin/backup.zip'),
     ('GET', '/api/v1/audit'),
+    ('GET', '/api/v1/live/scheduled'),
+    ('POST', '/api/v1/live/{live_id}/announce'),
     ('GET', '/api/v1/live/{live_id}/questions'),
     ('POST', '/api/v1/live/{live_id}/questions/{qid}/answer'),
     ('POST', '/api/v1/live/{live_id}/questions/{qid}/toggle'),
     ('GET', '/api/v1/live/{live_id}/reactions'),
+    ('GET', '/api/v1/live/{live_id}/presence.csv'),
+    ('GET', '/api/v1/live/{live_id}/questions.csv'),
+    ('GET', '/api/v1/live/{live_id}/reactions.csv'),
+    ('GET', '/api/v1/groups/{group}/student-results'),
     ('POST', '/api/v1/player/select'),
     ('POST', '/api/v1/player/{session_id}/next'),
     ('POST', '/api/v1/player/{session_id}/previous'),
@@ -94,6 +106,7 @@ PUBLIC_ENDPOINTS = {
     ('POST', '/api/v1/auth/login'), ('POST', '/api/v1/auth/change-password'),
     ('POST', '/api/v1/student/join'),
     ('GET', '/api/v1/help'), ('GET', '/health'),
+    ('GET', '/media/{group}/{event}/{filename}'),
 }
 STUDENT_ENDPOINTS = {
     ('POST', '/api/v1/student/resume'), ('GET', '/api/v1/student/current'),
@@ -142,7 +155,8 @@ def test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant(client
     concrete = path.format(
         group=group, event=event, title=event, live_id=live['live_id'],
         slide=slides[0], session_id='session_inexistante',
-        participation_id=student['participation_id'], qid=1, vid=1)
+        participation_id=student['participation_id'], qid=1, vid=1,
+        filename='image.png')
     for header in ('', f'Bearer {student["student_session_id"]}'):
         r = client.request(method, concrete, headers={'Authorization': header})
         assert r.status_code == 401, (method, concrete, r.status_code, r.text)

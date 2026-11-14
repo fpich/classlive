@@ -2,6 +2,9 @@ classlive:
   server:
     host: "0.0.0.0"
     port: 8080
+    # Build du frontend (Vite/React) servi sur /app par le backend lui-même.
+    # Chemin absolu, ou relatif au workdir. null = désactivé (API seule).
+    frontend_dir: null
   storage:
     workdir: "~/classlive_workspace"
     events_dir: "Evts"
@@ -32,3 +35,6 @@ classlive:
   export:
     # Taille max d'un export ZIP d'événement, en Mo.
     max_zip_mb: 50
+  media:
+    # Taille max d'un média uploadé par événement (png, jpg, gif, svg, webp, pdf), en Mo.
+    max_file_mb: 10
