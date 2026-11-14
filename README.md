@@ -273,6 +273,12 @@ classlive:
     max_file_mb: 10              # taille max d'un média uploadé par événement
 ```
 
+## v1.0.0 — Release figée
+
+Version **figée et validée end-to-end** : 80 routes publiques, 11 types de slides, 2 WebSockets, **424 tests à 100 % de couverture**, suite complète (curl + 30 étudiants en WS réels + soak) et charge 100 étudiants toutes vertes. Aucun changement fonctionnel après cette release sans bump de version.
+
+Périmètre livré : groupes/événements/slides (10 types d'exercices + contenu), médias, versions de slides, live formateur + mode autonome (verrouillage, timers par question/événement, corrections), compte à rebours live, Q&A, réactions, annonces, planification, mode anonyme, exports CSV (réponses/présence/questions/réactions) + ZIP événement + backup workspace, RGPD (oubli élève), audit, multi-comptes formateurs, rétention/purge, stats d'usage, frontend statique sur `/app`, durcissement (rate limits, tailles plafonnées, anti zip-bomb, SQL paramétré, symlinks rejetés).
+
 ## v0.9.2 — Pin sur image, compte à rebours live, résultats anonymes
 
 - **Type de slide `I` (pin sur image)** : réponse `{"x":0.25,"y":0.5}` (position relative 0–1 sur un média de l'événement, validation 422 hors bornes). Stats : `pins` (liste des points) + `center` (centre de gravité). Verrouillage identique aux autres exercices en autonome.
