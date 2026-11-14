@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "classlive-backend"
-version = "0.8.4"
+version = "1.0.0"
 description = "API de gestion des groupes et événements ClassLive"
 readme = "README.md"
 requires-python = ">=3.11"

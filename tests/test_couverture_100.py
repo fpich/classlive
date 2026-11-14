@@ -603,8 +603,7 @@ def test_main_module_runpy(tmp_path, monkeypatch):
     cfg.write_text('classlive:\n  storage:\n    workdir: "/tmp/classlive-runpy"\n', encoding="utf-8")
     monkeypatch.setenv("CLASSLIVE_CONFIG", str(cfg))
     monkeypatch.delenv("CLASSLIVE_TRAINER_PASSWORD", raising=False)
-    import classlive.__main__ as main_mod
     called = {}
-    monkeypatch.setattr(main_mod.uvicorn, "run", lambda app, **kw: called.setdefault("ran", True))
+    monkeypatch.setattr("uvicorn.run", lambda app, **kw: called.setdefault("ran", True))
     runpy.run_module("classlive.__main__", run_name="__main__")
     assert called.get("ran") is True

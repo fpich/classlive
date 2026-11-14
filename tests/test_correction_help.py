@@ -81,8 +81,10 @@ def test_migrate_previous_sqlite(client,tmp_path):
     db=tmp_path/'classlive.db'
     with sqlite3.connect(db) as con:
         con.execute('ALTER TABLE submissions ADD COLUMN points INTEGER NOT NULL DEFAULT 0')
+    con.close()
     with TestClient(create_app(Settings(workdir=tmp_path,trainer_password='test-password'))) as c:
         assert c.get('/health').status_code==200
     with sqlite3.connect(db) as con:
         cols=[r[1] for r in con.execute('PRAGMA table_info(submissions)')]
+    con.close()
     assert 'points' not in cols

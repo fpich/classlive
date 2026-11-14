@@ -455,10 +455,12 @@ def test_migration_correction_visible(tmp_path):
           slide_number INTEGER NOT NULL, answer_json TEXT NOT NULL, submitted_at TEXT NOT NULL
         );
         ''')
+    con.close()
     with TestClient(create_app(Settings(workdir=tmp_path, trainer_password='x'))) as c:
         assert c.get('/health').json()['status'] == 'ok'
     with sqlite3.connect(db) as con:
         cols = [r[1] for r in con.execute('PRAGMA table_info(live_sessions)')]
+    con.close()
     assert 'correction_visible' in cols
 
 

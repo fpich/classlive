@@ -32,8 +32,8 @@ jobs:
       - name: Python compile check
         run: python -m compileall -q classlive tests
 
-      - name: Pytest avec couverture (seuil 90 %)
-        run: python -m pytest -q -p no:cacheprovider --disable-warnings --cov=classlive --cov-report=term-missing --cov-fail-under=90
+      - name: Pytest avec couverture (seuil 100 %)
+        run: python -m pytest -q -p no:cacheprovider --disable-warnings --cov=classlive --cov-report=term-missing --cov-fail-under=100
 
       - name: Scénario curl sur serveur éphémère
         run: python tests/test_curl_isole.py

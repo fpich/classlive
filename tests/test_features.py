@@ -402,6 +402,7 @@ def test_purge_retention_manuel_et_au_demarrage(tmp_path):
         c.post(f'/api/v1/live/{live["live_id"]}/stop')
         with sqlite3.connect(tmp_path / 'classlive.db') as con:
             con.execute("UPDATE live_sessions SET ended_at='2000-01-01T00:00:00+00:00'")
+        con.close()
         r = c.post('/api/v1/admin/purge')
         assert r.status_code == 200 and r.json()['deleted_sessions'] == 1
         assert c.get(f'/api/v1/groups/{g}/events/{e}/sessions').json()['sessions'] == []
@@ -413,6 +414,7 @@ def test_purge_retention_manuel_et_au_demarrage(tmp_path):
         c.post(f'/api/v1/live/{live["live_id"]}/stop')
         with sqlite3.connect(tmp_path / 'classlive.db') as con:
             con.execute("UPDATE live_sessions SET ended_at='2000-01-01T00:00:00+00:00'")
+        con.close()
     with app_client(tmp_path, retention_days=30) as c2:  # purge au démarrage de create_app
         assert c2.get(f'/api/v1/groups/{g}/events/{e}/sessions').json()['sessions'] == []
     with app_client(tmp_path, retention_days=0) as c3:  # rétention désactivée : rien n'est purgé
@@ -420,6 +422,7 @@ def test_purge_retention_manuel_et_au_demarrage(tmp_path):
         c3.post(f'/api/v1/live/{live["live_id"]}/stop')
         with sqlite3.connect(tmp_path / 'classlive.db') as con:
             con.execute("UPDATE live_sessions SET ended_at='2000-01-01T00:00:00+00:00'")
+        con.close()
         assert c3.post('/api/v1/admin/purge').json()['deleted_sessions'] == 0
         assert len(c3.get(f'/api/v1/groups/{g}/events/{e}/sessions').json()['sessions']) == 1
 

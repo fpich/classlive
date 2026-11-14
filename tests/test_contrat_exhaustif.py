@@ -227,6 +227,7 @@ def test_reponse_trop_volumineuse_et_historique_modifications(client, tmp_path):
     assert result['answers'][0]['answer'] == {'selected': ['B']}
     with sqlite3.connect(tmp_path/'classlive.db') as con:
         assert con.execute('SELECT COUNT(*) FROM submissions').fetchone()[0] == 2
+    con.close()
 
 
 @pytest.mark.parametrize('markdown', [
