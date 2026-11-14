@@ -57,7 +57,7 @@ bash tests/run_suite_complete.sh
 
 Le script crée si besoin un environnement Python réservé aux tests (`.venv-tests`), lance les **tests pytest**, le **parcours complet curl sur un serveur éphémère**, puis **30 étudiants simultanés** sur de véritables WebSockets avec réponses concurrentes, redémarrage du service isolé pendant un Live, export CSV et réinitialisation. Aucun test de cette commande ne modifie le daemon installé sur `:8080`, le fichier `/etc/classlive/config.yml` ni le workspace de production.
 
-Le rapport local est `tests/rapports/derniere_execution.log` ; le détail du périmètre est dans [`tests/MATRICE_COUVERTURE.md`](tests/MATRICE_COUVERTURE.md). Chaque nouvel endpoint doit être ajouté à l'inventaire des 48 opérations OpenAPI dans `tests/test_contrat_exhaustif.py`. Les tests ne garantissent pas l'absence de tout défaut et ne remplacent pas une campagne d'exploitation longue durée.
+Le rapport local est `tests/rapports/derniere_execution.log` ; le détail du périmètre est dans [`tests/MATRICE_COUVERTURE.md`](tests/MATRICE_COUVERTURE.md). Chaque nouvel endpoint doit être ajouté à l'inventaire des 51 opérations OpenAPI dans `tests/test_contrat_exhaustif.py`. Les tests ne garantissent pas l'absence de tout défaut et ne remplacent pas une campagne d'exploitation longue durée.
 
 Pour exécuter seulement les tests Python : `pytest -q` (avec les dépendances de test).
 
@@ -141,7 +141,7 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `PATCH` | `/groups/{group}/events/{event}/slides/{slide}` | Modifier `new_name` / `new_number` / `new_type` |
 | `PUT` | `/groups/{group}/events/{event}/slides/{slide}/content` | Remplacer le Markdown |
 | `DELETE` | `/groups/{group}/events/{event}/slides/{slide}` | Supprimer une slide |
-| `POST` | `/live/start` | Démarrer (`{"group":"G001_Formation","title":"E001_Introduction"}`) ; retourne `live_id`, `session_code` |
+| `POST` | `/live/start` | Démarrer (`{"group","title"}`) ; retourne `live_id`, `session_code`. Options mode autonome : `mode:"autonome"`, `timing:"none|par_question|par_evenement"`, `timing_seconds:N`, `correction:"jamais|après_question|à_la_fin"` |
 | `GET` | `/live/{live_id}/status` | Slide et état actuel |
 | `POST` | `/live/{live_id}/next` | Slide suivante |
 | `POST` | `/live/{live_id}/previous` | Slide précédente |
@@ -190,7 +190,10 @@ Pour les appels suivants, envoyer `Authorization: Bearer STUDENT_SESSION_ID` :
 |---|---|---|
 | `POST` | `/api/v1/student/resume` | Retrouver nom, prénom et slide actuelle sans ressaisir |
 | `GET` | `/api/v1/student/current` | Voir seulement la slide courante |
-| `POST` | `/api/v1/student/answers` | Répondre à la slide **exercice actuellement affichée** |
+| `POST` | `/api/v1/student/answers` | Répondre à la slide **exercice actuellement affichée** (en autonome : verrouille la réponse, une seule fois) |
+| `POST` | `/api/v1/student/next` | Avancer (autonome uniquement ; bloqué sur un exercice tant qu'aucune réponse validée) |
+| `POST` | `/api/v1/student/previous` | Reculer (toujours autorisé, lecture seule) |
+| `GET` | `/api/v1/student/results` | Son propre récapitulatif (autonome, session perso terminée uniquement) |
 
 Exemple de soumission :
 
@@ -226,6 +229,10 @@ Les noms/prénoms/réponses sont des données personnelles : informer les étudi
 - Le guide complet est copié au premier lancement dans `<workdir>/GUIDE_CLASSLIVE.md` et accessible en Markdown via `GET /api/v1/help` ; il n'est pas écrasé lors des mises à jour.
 - Migration SQLite automatique des anciennes bases v0.7.0 (sauvegarder `classlive.db` avant mise à jour recommandée).
 
+
+## Session autonome (self-paced, v0.8.4 révision 4)
+
+Un événement peut être lancé en **mode autonome** : chaque élève avance à son rythme avec le même code à 6 chiffres, ses réponses sont **verrouillées à la première soumission** (revenir en arrière = lecture seule, resoumettre → 409), et `next` est bloqué sur un exercice tant qu'aucune réponse n'est validée (les slides contenu passent librement). La session perso se termine quand toutes les slides sont vues, à la deadline (`timing: "par_evenement"`), à l'expiration d'un timer (`timing: "par_question"`, durée identique pour toutes les questions), ou au `stop` du formateur. L'élève reçoit alors son récap via `GET /api/v1/student/results`. Le corrigé est diffusé selon `correction` : `jamais`, `après_question` (dès la réponse verrouillée), ou `à_la_fin`. Les sessions autonomes sont archivées comme les Live (mêmes `results`, `export.csv`, `student-results`). Aucun score n'est calculé.
 
 ## Préparation frontend (v0.8.4 révision 3)
 

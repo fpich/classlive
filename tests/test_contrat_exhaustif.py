@@ -16,7 +16,7 @@ from classlive.api import create_app
 from classlive.config import Settings
 
 
-# 48 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
+# 51 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
 # Chaque route dispose en plus d'un scénario fonctionnel dans les tests historiques,
 # dans les nouveaux tests de ce fichier, ou dans test_reseau_multiclients.py.
 PUBLIC_ROUTES = {
@@ -26,6 +26,9 @@ PUBLIC_ROUTES = {
     ('POST', '/api/v1/student/resume'),
     ('GET', '/api/v1/student/current'),
     ('POST', '/api/v1/student/answers'),
+    ('POST', '/api/v1/student/next'),
+    ('POST', '/api/v1/student/previous'),
+    ('GET', '/api/v1/student/results'),
     ('POST', '/api/v1/live/start'),
     ('POST', '/api/v1/live/{live_id}/next'),
     ('POST', '/api/v1/live/{live_id}/previous'),
@@ -77,7 +80,8 @@ PUBLIC_ENDPOINTS = {
 }
 STUDENT_ENDPOINTS = {
     ('POST', '/api/v1/student/resume'), ('GET', '/api/v1/student/current'),
-    ('POST', '/api/v1/student/answers'),
+    ('POST', '/api/v1/student/answers'), ('POST', '/api/v1/student/next'),
+    ('POST', '/api/v1/student/previous'), ('GET', '/api/v1/student/results'),
 }
 
 

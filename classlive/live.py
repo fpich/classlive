@@ -82,11 +82,35 @@ class LiveStore:
               submitted_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS submission_lookup ON submissions(participation_id,slide_number,id);
+            CREATE TABLE IF NOT EXISTS autonomous_progress (
+              participation_id TEXT PRIMARY KEY REFERENCES participations(id) ON DELETE CASCADE,
+              current_number INTEGER NOT NULL, finished_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS slide_locks (
+              participation_id TEXT NOT NULL REFERENCES participations(id) ON DELETE CASCADE,
+              slide_number INTEGER NOT NULL, locked_at TEXT NOT NULL, reason TEXT NOT NULL,
+              PRIMARY KEY(participation_id, slide_number)
+            );
+            CREATE TABLE IF NOT EXISTS question_timers (
+              participation_id TEXT NOT NULL REFERENCES participations(id) ON DELETE CASCADE,
+              slide_number INTEGER NOT NULL, started_at TEXT NOT NULL,
+              PRIMARY KEY(participation_id, slide_number)
+            );
             ''')
             # Migration non destructive des bases créées avec la v0.7.0.
             columns = {row['name'] for row in con.execute('PRAGMA table_info(live_sessions)')}
             if 'correction_visible' not in columns:
                 con.execute('ALTER TABLE live_sessions ADD COLUMN correction_visible INTEGER NOT NULL DEFAULT 0')
+            # Migration v0.8.4 rev.4 : mode autonome.
+            for col, ddl in (
+                ('mode', "TEXT NOT NULL DEFAULT 'live'"),
+                ('timing', "TEXT NOT NULL DEFAULT 'none'"),
+                ('timing_seconds', "INTEGER"),
+                ('correction_mode', "TEXT NOT NULL DEFAULT 'show'"),
+                ('deadline', "TEXT"),
+            ):
+                if col not in columns:
+                    con.execute(f'ALTER TABLE live_sessions ADD COLUMN {col} {ddl}')
             old_submissions = {row['name'] for row in con.execute('PRAGMA table_info(submissions)')}
             if 'points' in old_submissions:
                 con.execute('CREATE TABLE submissions_new (id INTEGER PRIMARY KEY AUTOINCREMENT, participation_id TEXT NOT NULL REFERENCES participations(id) ON DELETE CASCADE, slide_number INTEGER NOT NULL, answer_json TEXT NOT NULL, submitted_at TEXT NOT NULL)')
@@ -118,7 +142,23 @@ class LiveStore:
     def _participation(self, con, pid):
         return self.fail_if_missing(con.execute('SELECT * FROM participations WHERE id=?', (pid,)).fetchone(), 'Participation')
 
-    def start(self, group: str, event: str) -> dict:
+    def start(self, group: str, event: str, mode: str = 'live', timing: str = 'none',
+              timing_seconds: int | None = None, correction_mode: str = 'show') -> dict:
+        """Démarre une session. mode='live' (formateur pilote) ou 'autonome' (élèves à leur rythme)."""
+        if mode not in ('live', 'autonome'):
+            raise ValueError("mode doit être 'live' ou 'autonome'.")
+        if mode == 'autonome':
+            if timing not in ('none', 'par_question', 'par_evenement'):
+                raise ValueError("timing doit être 'none', 'par_question' ou 'par_evenement'.")
+            if timing != 'none':
+                if type(timing_seconds) is not int or not 1 <= timing_seconds <= 86400:
+                    raise ValueError('timing_seconds requis (1 à 86400) quand timing est actif.')
+            else:
+                timing_seconds = None
+            if correction_mode not in ('jamais', 'après_question', 'à_la_fin'):
+                raise ValueError("correction_mode doit être 'jamais', 'après_question' ou 'à_la_fin'.")
+        else:
+            timing, timing_seconds, correction_mode = 'none', None, 'show'
         # Freeze both public slide and private correct answers for historical integrity.
         with self.lock, self.slides.events._lock:
             g, parent = self.slides._parent(group, event)
@@ -134,28 +174,34 @@ class LiveStore:
             lid = str(uuid.uuid4())
             with self.db() as con:
                 if con.execute("SELECT 1 FROM live_sessions WHERE group_name=? AND event_name=? AND status='running'", (g.name, parent.name)).fetchone():
-                    raise ResourceConflict('Un Live est déjà actif sur cet événement.')
+                    raise ResourceConflict('Une session est déjà active sur cet événement.')
                 for _ in range(30):
                     code = f'{secrets.randbelow(1000000):06d}'
                     if not con.execute('SELECT 1 FROM live_sessions WHERE code=?', (code,)).fetchone():
                         break
                 else:
                     raise ResourceConflict('Aucun code Live disponible.')
-                con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number) VALUES (?,?,?,?,?,?,?)',
-                            (lid, code, g.name, parent.name, now(), 'running', prepared[0][0]))
+                deadline = None
+                if mode == 'autonome' and timing == 'par_evenement':
+                    deadline = datetime.fromtimestamp(time.time() + timing_seconds, timezone.utc).isoformat()
+                con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number,mode,timing,timing_seconds,correction_mode,deadline) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                            (lid, code, g.name, parent.name, now(), 'running', prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline))
                 con.executemany('INSERT INTO snapshots(live_id,number,filename,kind,public_content,answer_key) VALUES (?,?,?,?,?,?)',
                                 [(lid, *row) for row in prepared])
-            return {'live_id': lid, 'session_code': code, 'group': g.name, 'event': parent.name, 'current_slide': prepared[0][1], 'status': 'running'}
+            return {'live_id': lid, 'session_code': code, 'group': g.name, 'event': parent.name, 'current_slide': prepared[0][1],
+                    'status': 'running', 'mode': mode, 'timing': timing, 'timing_seconds': timing_seconds, 'correction_mode': correction_mode}
 
     def state(self, lid: str, include_content: bool = False):
         with self.db() as con:
             session = self._live(con, lid)
             slides = con.execute('SELECT number,filename,kind,public_content FROM snapshots WHERE live_id=? ORDER BY number', (lid,)).fetchall()
             current = next(s for s in slides if s['number'] == session['current_number'])
-            result = {'live_id': lid, 'status': session['status'], 'group': session['group_name'], 'event': session['event_name'],
+            result = {'live_id': lid, 'status': session['status'], 'mode': session['mode'], 'group': session['group_name'], 'event': session['event_name'],
                       'slide': current['filename'], 'slide_type': current['kind'], 'number': current['number'],
                       'position': next(i+1 for i,s in enumerate(slides) if s['number'] == current['number']),
                       'total': len(slides), 'revision': session['revision'],
+                      'timing': session['timing'], 'timing_seconds': session['timing_seconds'],
+                      'correction_mode': session['correction_mode'], 'deadline': session['deadline'],
                       'correction_visible': bool(session['correction_visible']) if current['kind'] in EXERCISES else False}
             if include_content:
                 result['content'] = current['public_content']
@@ -205,6 +251,18 @@ class LiveStore:
             session = self._live(con, lid)
             if session['status'] == 'running':
                 con.execute("UPDATE live_sessions SET status='ended',ended_at=?,revision=revision+1 WHERE id=?", (now(),lid))
+                if session['mode'] == 'autonome':
+                    # Verrouille la position de chaque élève non terminé.
+                    parts = con.execute('SELECT id FROM participations WHERE live_id=?', (lid,)).fetchall()
+                    snaps = con.execute('SELECT number FROM snapshots WHERE live_id=?', (lid,)).fetchall()
+                    for p in parts:
+                        prog = con.execute('SELECT current_number,finished_at FROM autonomous_progress WHERE participation_id=?', (p['id'],)).fetchone()
+                        if prog is None or prog['finished_at']:
+                            continue
+                        for s in snaps:
+                            con.execute('INSERT OR IGNORE INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?)',
+                                        (p['id'], s['number'], now(), 'session_ended'))
+                        con.execute('UPDATE autonomous_progress SET finished_at=? WHERE participation_id=?', (now(), p['id']))
         return self.state(lid)
 
     def join(self, code: str, nom: str, prenom: str):
@@ -216,8 +274,12 @@ class LiveStore:
             digest = hashlib.sha256(token.encode()).hexdigest()
             con.execute('INSERT INTO participations(id,live_id,nom,prenom,token_hash,joined_at,last_seen) VALUES(?,?,?,?,?,?,?)',
                         (pid, session['id'],nom,prenom,digest,now(),now()))
+            if session['mode'] == 'autonome':
+                first = con.execute('SELECT MIN(number) AS n FROM snapshots WHERE live_id=?', (session['id'],)).fetchone()['n']
+                con.execute('INSERT INTO autonomous_progress(participation_id,current_number) VALUES (?,?)', (pid, first))
+        student = {'id': pid, 'live_id': session['id'], 'nom': nom, 'prenom': prenom}
         return {'student_session_id': token, 'participation_id': pid, 'live_id': session['id'], 'nom': nom, 'prenom': prenom,
-                'current': self.state(session['id'], include_content=True)}
+                'mode': session['mode'], 'current': self.student_state(student)}
 
     def authenticate_student(self, token: str, require_running: bool = True):
         if not token or len(token) > 512:
@@ -235,8 +297,166 @@ class LiveStore:
 
     def resume(self, student):
         self.touch(student['id'])
+        with self.db() as con:
+            live = self._live(con, student['live_id'])
+        current = self.student_state(student) if live['mode'] == 'autonome' else self.state(student['live_id'], include_content=True)
         return {'participation_id': student['id'], 'live_id': student['live_id'], 'nom': student['nom'], 'prenom': student['prenom'],
-                'current': self.state(student['live_id'], include_content=True)}
+                'mode': live['mode'], 'current': current}
+
+    # ── Mode autonome ────────────────────────────────────────────────────────
+
+    def _ensure_progress(self, con, pid, lid):
+        prog = con.execute('SELECT * FROM autonomous_progress WHERE participation_id=?', (pid,)).fetchone()
+        if prog is None:
+            first = con.execute('SELECT MIN(number) AS n FROM snapshots WHERE live_id=?', (lid,)).fetchone()['n']
+            con.execute('INSERT INTO autonomous_progress(participation_id,current_number) VALUES (?,?)', (pid, first))
+            prog = con.execute('SELECT * FROM autonomous_progress WHERE participation_id=?', (pid,)).fetchone()
+        return prog
+
+    @staticmethod
+    def _slide_locked(con, pid, number):
+        return con.execute('SELECT 1 FROM slide_locks WHERE participation_id=? AND slide_number=?', (pid, number)).fetchone() is not None
+
+    def _check_deadline(self, con, pid, live):
+        """En timing par_evenement, termine la session perso à la deadline."""
+        if live['mode'] == 'autonome' and live['timing'] == 'par_evenement' and live['deadline']:
+            prog = con.execute('SELECT finished_at FROM autonomous_progress WHERE participation_id=?', (pid,)).fetchone()
+            if prog and not prog['finished_at'] and datetime.now(timezone.utc).isoformat() > live['deadline']:
+                snaps = con.execute('SELECT number FROM snapshots WHERE live_id=?', (live['id'],)).fetchall()
+                for s in snaps:
+                    con.execute('INSERT OR IGNORE INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?)',
+                                (pid, s['number'], now(), 'deadline'))
+                con.execute('UPDATE autonomous_progress SET finished_at=? WHERE participation_id=?', (now(), pid))
+
+    def _student_current_number(self, con, student, live):
+        if live['mode'] == 'autonome':
+            self._ensure_progress(con, student['id'], live['id'])
+            self._check_deadline(con, student['id'], live)
+            prog = con.execute('SELECT current_number,finished_at FROM autonomous_progress WHERE participation_id=?',
+                               (student['id'],)).fetchone()
+            return prog['current_number'], prog['finished_at']
+        return live['current_number'], None
+
+    def student_state(self, student):
+        """Vue de la slide courante pour un élève (position perso en autonome)."""
+        with self.db() as con:
+            live = self._live(con, student['live_id'])
+            number, finished = self._student_current_number(con, student, live)
+            snap = con.execute('SELECT * FROM snapshots WHERE live_id=? AND number=?', (live['id'], number)).fetchone()
+            if snap is None:
+                raise ResourceNotFound('Slide introuvable dans la session.')
+            slides = con.execute('SELECT number FROM snapshots WHERE live_id=? ORDER BY number', (live['id'],)).fetchall()
+            numbers = [s['number'] for s in slides]
+            i = numbers.index(number)
+            locked = self._slide_locked(con, student['id'], number) if live['mode'] == 'autonome' else False
+            result = {'live_id': live['id'], 'status': live['status'], 'mode': live['mode'],
+                      'group': live['group_name'], 'event': live['event_name'],
+                      'slide': snap['filename'], 'slide_type': snap['kind'], 'number': number,
+                      'position': i + 1, 'total': len(numbers), 'revision': live['revision'],
+                      'content': snap['public_content'], 'finished': bool(finished)}
+            if live['mode'] == 'autonome':
+                result['locked'] = locked
+                # Timer par question : démarre au premier affichage de la slide.
+                if live['timing'] == 'par_question' and snap['kind'] in EXERCISES and not finished:
+                    timer = con.execute('SELECT started_at FROM question_timers WHERE participation_id=? AND slide_number=?',
+                                        (student['id'], number)).fetchone()
+                    if timer is None:
+                        started = now()
+                        con.execute('INSERT INTO question_timers(participation_id,slide_number,started_at) VALUES (?,?,?)',
+                                    (student['id'], number, started))
+                    else:
+                        started = timer['started_at']
+                    expires_ts = datetime.fromisoformat(started).timestamp() + live['timing_seconds']
+                    if not locked and time.time() > expires_ts:
+                        con.execute('INSERT OR IGNORE INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?)',
+                                    (student['id'], number, now(), 'time_expired'))
+                        locked = True
+                        result['locked'] = True
+                    if not locked:
+                        result['question_started_at'] = started
+                        result['expires_at'] = datetime.fromtimestamp(expires_ts, timezone.utc).isoformat()
+                # Correction selon le mode.
+                show_correction = False
+                if live['correction_mode'] == 'après_question' and locked and snap['kind'] in EXERCISES:
+                    show_correction = True
+                if live['correction_mode'] == 'à_la_fin' and finished:
+                    show_correction = True
+                if show_correction and snap['answer_key'] is not None:
+                    result['correction'] = json.loads(snap['answer_key'])
+                elif show_correction:
+                    result['correction'] = None
+            else:
+                result['correction_visible'] = bool(live['correction_visible']) if snap['kind'] in EXERCISES else False
+                if result['correction_visible'] and live['correction_visible']:
+                    private = con.execute('SELECT answer_key FROM snapshots WHERE live_id=? AND number=?',
+                                          (live['id'], number)).fetchone()['answer_key']
+                    result['correction'] = json.loads(private) if private is not None else None
+            return result
+
+    def student_move(self, student, direction: str):
+        """next/previous en mode autonome. next bloqué sur un exercice non répondu."""
+        with self.lock, self.db() as con:
+            live = self._live(con, student['live_id'])
+            if live['status'] != 'running':
+                raise ResourceConflict('La session est terminée.')
+            if live['mode'] != 'autonome':
+                raise ResourceConflict('La navigation élève n’est disponible qu’en session autonome.')
+            prog = self._ensure_progress(con, student['id'], live['id'])
+            self._check_deadline(con, student['id'], live)
+            prog = con.execute('SELECT * FROM autonomous_progress WHERE participation_id=?', (student['id'],)).fetchone()
+            if direction == 'next' and prog['finished_at']:
+                raise ResourceConflict('Votre session autonome est terminée.')
+            numbers = [r['number'] for r in con.execute('SELECT number FROM snapshots WHERE live_id=? ORDER BY number', (live['id'],))]
+            i = numbers.index(prog['current_number'])
+            current_snap = con.execute('SELECT kind FROM snapshots WHERE live_id=? AND number=?', (live['id'], prog['current_number'])).fetchone()
+            if direction == 'next':
+                if current_snap['kind'] in EXERCISES and not self._slide_locked(con, student['id'], prog['current_number']):
+                    raise ResourceConflict('Validez votre réponse avant de passer à la suivante.')
+                target = numbers[min(i + 1, len(numbers) - 1)]
+                if i + 1 >= len(numbers):
+                    self._finish_locked(con, student['id'], live['id'], 'completed')
+            elif direction == 'previous':
+                target = numbers[max(i - 1, 0)]
+            else:
+                raise ValueError('Direction invalide.')
+            con.execute('UPDATE autonomous_progress SET current_number=? WHERE participation_id=?', (target, student['id']))
+        return self.student_state(student)
+
+    def _finish_locked(self, con, pid, lid, reason):
+        snaps = con.execute('SELECT number FROM snapshots WHERE live_id=?', (lid,)).fetchall()
+        for s in snaps:
+            con.execute('INSERT OR IGNORE INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?)',
+                        (pid, s['number'], now(), reason))
+        con.execute('UPDATE autonomous_progress SET finished_at=? WHERE participation_id=?', (now(), pid))
+
+    def student_own_results(self, student):
+        """Récap personnel de l'élève en autonome, disponible une fois sa session terminée."""
+        with self.db() as con:
+            live = self._live(con, student['live_id'])
+            if live['mode'] != 'autonome':
+                raise ResourceConflict('Le récapitulatif personnel n’est disponible qu’en session autonome.')
+            prog = self._ensure_progress(con, student['id'], live['id'])
+            if not prog['finished_at']:
+                raise ResourceConflict('Terminez toutes les slides pour voir votre récapitulatif.')
+            snaps = con.execute('SELECT number,filename,kind,answer_key FROM snapshots WHERE live_id=? ORDER BY number', (live['id'],)).fetchall()
+            subs = con.execute('SELECT slide_number,answer_json,submitted_at FROM submissions WHERE participation_id=? ORDER BY slide_number,id',
+                               (student['id'],)).fetchall()
+            by_slide = {}
+            for s in subs:
+                by_slide[s['slide_number']] = s  # dernière réponse (une seule en autonome)
+            slides_out = []
+            for snap in snaps:
+                entry = {'slide': snap['filename'], 'slide_type': snap['kind'], 'number': snap['number'],
+                         'answered': snap['number'] in by_slide}
+                if entry['answered']:
+                    entry['answer'] = json.loads(by_slide[snap['number']]['answer_json'])
+                    entry['submitted_at'] = by_slide[snap['number']]['submitted_at']
+                if live['correction_mode'] != 'jamais' and snap['answer_key'] is not None:
+                    entry['correction'] = json.loads(snap['answer_key'])
+                slides_out.append(entry)
+            return {'live_id': live['id'], 'participation_id': student['id'], 'nom': student['nom'], 'prenom': student['prenom'],
+                    'finished_at': prog['finished_at'], 'total_slides': len(snaps), 'answered': sum(1 for e in slides_out if e['answered']),
+                    'slides': slides_out}
 
     def submit(self, student, answer: object):
         if not isinstance(answer, dict):
@@ -245,11 +465,27 @@ class LiveStore:
             live = self._live(con, student['live_id'])
             if live['status'] != 'running':
                 raise ResourceConflict('La session est terminée.')
-            snap = con.execute('SELECT * FROM snapshots WHERE live_id=? AND number=?', (live['id'],live['current_number'])).fetchone()
+            if live['mode'] == 'autonome':
+                number, finished = self._student_current_number(con, student, live)
+                if finished:
+                    raise ResourceConflict('Votre session autonome est terminée.')
+                snap = con.execute('SELECT * FROM snapshots WHERE live_id=? AND number=?', (live['id'], number)).fetchone()
+            else:
+                snap = con.execute('SELECT * FROM snapshots WHERE live_id=? AND number=?', (live['id'],live['current_number'])).fetchone()
             if snap['kind'] not in EXERCISES:
                 raise ResourceConflict('La slide en cours n’est pas un exercice.')
             if live['correction_visible']:
                 raise ResourceConflict('Les réponses sont fermées pendant l’affichage de la correction.')
+            if live['mode'] == 'autonome':
+                if self._slide_locked(con, student['id'], snap['number']):
+                    raise ResourceConflict('Réponse déjà verrouillée pour cette slide.')
+                if live['timing'] == 'par_question':
+                    timer = con.execute('SELECT started_at FROM question_timers WHERE participation_id=? AND slide_number=?',
+                                        (student['id'], snap['number'])).fetchone()
+                    if timer is not None:
+                        expires = datetime.fromisoformat(timer['started_at']).timestamp() + live['timing_seconds']
+                        if time.time() > expires:
+                            raise ResourceConflict('Temps écoulé pour cette question : réponse verrouillée.')
             # Limit answer size for a local deployment.
             data = json.dumps(answer, ensure_ascii=False, separators=(',',':'))
             if len(data.encode('utf-8')) > 65536:
@@ -257,8 +493,12 @@ class LiveStore:
             stamp = now()
             con.execute('INSERT INTO submissions(participation_id,slide_number,answer_json,submitted_at) VALUES (?,?,?,?)',
                         (student['id'],snap['number'],data,stamp))
+            if live['mode'] == 'autonome':
+                con.execute('INSERT INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?) '
+                            'ON CONFLICT(participation_id,slide_number) DO UPDATE SET reason=excluded.reason, locked_at=excluded.locked_at',
+                            (student['id'], snap['number'], stamp, 'answered'))
             con.execute('UPDATE participations SET last_seen=? WHERE id=?', (stamp,student['id']))
-            return {'success': True, 'slide': snap['filename'], 'submitted_at': stamp, 'saved': True}
+            return {'success': True, 'slide': snap['filename'], 'submitted_at': stamp, 'saved': True, 'locked': live['mode'] == 'autonome'}
 
     def connected(self, lid, pid):
         with self.lock:
@@ -290,7 +530,7 @@ class LiveStore:
     def sessions(self, group: str, event: str):
         g,parent = self.slides._parent(group,event)
         with self.db() as con:
-            rows = con.execute('SELECT id,started_at,ended_at,status FROM live_sessions WHERE group_name=? AND event_name=? ORDER BY started_at', (g.name,parent.name)).fetchall()
+            rows = con.execute('SELECT id,started_at,ended_at,status,mode FROM live_sessions WHERE group_name=? AND event_name=? ORDER BY started_at', (g.name,parent.name)).fetchall()
         return {'group': g.name,'event': parent.name, 'sessions': [dict(r) for r in rows]}
 
     def results(self, lid):
@@ -387,7 +627,7 @@ class LiveStore:
         """Tous les Lives en cours (un par événement au plus)."""
         with self.db() as con:
             rows = con.execute(
-                "SELECT id,code,group_name,event_name,started_at,current_number "
+                "SELECT id,code,group_name,event_name,started_at,current_number,mode,timing,timing_seconds,correction_mode "
                 "FROM live_sessions WHERE status='running' ORDER BY started_at").fetchall()
         return {'lives': [dict(r) for r in rows]}
 

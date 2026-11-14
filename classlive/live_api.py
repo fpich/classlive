@@ -25,6 +25,10 @@ class Login(BaseModel):
 class Begin(BaseModel):
     group: str
     title: str
+    mode: str = 'live'
+    timing: str = 'none'
+    timing_seconds: int | None = None
+    correction: str | None = None
 
 
 class Jump(BaseModel):
@@ -116,6 +120,7 @@ class Hub:
     def __init__(self):
         self.students: dict[str,set[WebSocket]] = defaultdict(set)
         self.trainers: dict[str,set[WebSocket]] = defaultdict(set)
+        self.by_pid: dict[str,dict[str,WebSocket]] = defaultdict(dict)
 
     async def publish(self, lid, message, trainer_only=False):
         targets=list(self.trainers.get(lid,set()))
@@ -126,6 +131,18 @@ class Hub:
                 await ws.send_json(message)
             except (WebSocketDisconnect, RuntimeError):
                 self.trainers[lid].discard(ws)
+                self.students[lid].discard(ws)
+                for pid, w in list(self.by_pid.get(lid, {}).items()):
+                    if w is ws:
+                        del self.by_pid[lid][pid]
+
+    async def publish_to_student(self, lid, pid, message):
+        ws = self.by_pid.get(lid, {}).get(pid)
+        if ws is not None:
+            try:
+                await ws.send_json(message)
+            except (WebSocketDisconnect, RuntimeError):
+                self.by_pid[lid].pop(pid, None)
                 self.students[lid].discard(ws)
 
 
@@ -150,7 +167,12 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
 
     @trainer_routes.post('/live/start', tags=['Live formateur'])
     def start(payload: Begin):
-        return store.start(payload.group,payload.title)
+        correction = payload.correction or ('show' if payload.mode == 'live' else 'à_la_fin')
+        try:
+            return store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
+                               timing_seconds=payload.timing_seconds, correction_mode=correction)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     async def movement(lid,direction,number=None):
         result=store.move(lid,direction,number)
@@ -258,7 +280,27 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
     @student_routes.get('/student/current',tags=['Étudiants'])
     def current(student=Depends(auth.student)):
         store.touch(student['id'])
-        return store.state(student['live_id'],include_content=True)
+        return store.student_state(student)
+
+    @student_routes.post('/student/next',tags=['Étudiants'])
+    async def student_next(student=Depends(auth.student)):
+        result=store.student_move(student,'next')
+        lid=student['live_id']
+        await hub.publish_to_student(lid,student['id'],{'event':'slide_changed','current':result})
+        if result.get('finished'):
+            await hub.publish(lid,{'event':'student_finished','participation_id':student['id']},trainer_only=True)
+            await hub.publish_to_student(lid,student['id'],{'event':'session_ended','live_id':lid})
+        return result
+
+    @student_routes.post('/student/previous',tags=['Étudiants'])
+    async def student_previous(student=Depends(auth.student)):
+        result=store.student_move(student,'previous')
+        await hub.publish_to_student(student['live_id'],student['id'],{'event':'slide_changed','current':result})
+        return result
+
+    @student_routes.get('/student/results',tags=['Étudiants'])
+    def student_results(student=Depends(auth.student)):
+        return store.student_own_results(student)
 
     @student_routes.post('/student/answers',tags=['Étudiants'])
     async def answer(payload: Submit,student=Depends(auth.student)):
@@ -267,6 +309,9 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         except ValueError as exc:
             raise HTTPException(status_code=422,detail=str(exc)) from exc
         await hub.publish(student['live_id'],{'event':'answer_received','participation_id':student['id']},trainer_only=True)
+        if result.get('locked'):
+            await hub.publish_to_student(student['live_id'],student['id'],
+                                         {'event':'answer_locked','slide':result['slide']})
         return result
 
     async def authorize_ws(ws: WebSocket, trainer: bool):
@@ -298,8 +343,9 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
             return
         lid,pid=student['live_id'],student['id']
         hub.students[lid].add(ws)
+        hub.by_pid[lid][pid]=ws
         store.connected(lid,pid)
-        await ws.send_json({'event':'current','current':store.state(lid,include_content=True)})
+        await ws.send_json({'event':'current','current':store.student_state(student)})
         await hub.publish(lid,{'event':'student_connected','participation_id':pid},trainer_only=True)
         try:
             while True:
@@ -316,6 +362,7 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
             pass
         finally:
             hub.students[lid].discard(ws)
+            hub.by_pid[lid].pop(pid,None)
             store.disconnected(lid,pid)
             await hub.publish(lid,{'event':'student_disconnected','participation_id':pid},trainer_only=True)
 

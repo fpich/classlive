@@ -2,7 +2,7 @@
 
 ## Objectif et périmètre
 
-Les **48 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
+Les **51 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
 
 Le test d'inventaire `test_inventaire_openapi_et_websockets` échoue si une route apparaît/disparaît sans être ajoutée à la matrice des tests. Le test `test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant` essaie systématiquement chaque route protégée en étant anonyme et étudiant. La suite n'utilise **ni le port 8080, ni `/etc/classlive`, ni le workspace réel**.
 
@@ -47,6 +47,7 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 | Stats agrégées | `GET /live/{id}/stats` : décompte par option pour QCM, total seul pour les autres types, aucune identité, 401 sans jeton, 404 Live inconnu ; `?all=1` pour toutes les slides | `test_edge_cases.py`, `test_front_ready.py` |
 | Préparation front | CORS (origines libres/restreintes), `/live/active`, kick (404, CASCADE, fermeture WS au ping, notif moniteur), duplicate (conflits de nom, symlink rejeté, OSError), liste globale `/events`, change-password (401/422/503/429, invalidation tokens), `student-results` (homonymes, multi-sessions, strip) | `test_front_ready.py` |
 | Scénarios extrêmes | CSV échappement (`;`, `"`, emoji, BOM), stats options exotiques, limites de champs (120/150/100), emoji rejeté, join live terminé 404, stop idempotent, goto 0, réponse vide, frontmatter limite/null, double WS même token, WS sans ping, nav après rename/suppression, login username vide, change-password 8 car | `test_scenarios_extremes.py` |
+| Mode autonome | start étendu (mode/timing/correction validés), règle next (bloqué exercice non répondu), verrouillage réponse (409 resoumission), previous libre, fin auto (dernière slide/deadline/stop), timers par question (expiration → lock), corrections jamais/après_question/à_la_fin, récap `student/results`, positions indépendantes par élève, archivage identique au live, WS `slide_changed`/`session_ended`/`student_finished` perso | `test_autonome.py` |
 | WebSocket étudiant et moniteur | ouverture, rejet jetons invalides 1008, présence, ping/pong, diffusion des slides et corrections, suivi des réponses, déconnexion | `test_contrat_exhaustif.py`, `test_live.py`, `ws_live_smoke.py`, `test_reseau_multiclients.py` |
 | Concurrence et redémarrage | **30 étudiants en parallèle** : inscriptions, connexions, réponses, absence de mélange, déconnexions partielles, reprise après arrêt du processus avec SQLite persistant | `test_reseau_multiclients.py` |
 | Charge | **100 étudiants** (`test_charge_100.py`) : mêmes vérifications qu'à 30 | `test_charge_100.py` |
