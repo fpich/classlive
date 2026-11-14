@@ -19,7 +19,13 @@ class Settings:
     api_key: str | None = None
     trainer_username: str = "formateur"
     trainer_password: str | None = None
+    trainer_accounts: tuple[tuple[str, str], ...] = ()
     cors_origins: tuple[str, ...] = ("*",)
+    max_students: int = 300
+    retention_days: int = 365
+    audit_enabled: bool = True
+    audit_file: Path | None = None
+    export_max_zip_mb: int = 50
 
     @property
     def events_root(self) -> Path:
@@ -81,5 +87,41 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     trainer_password = os.getenv('CLASSLIVE_TRAINER_PASSWORD')
     if not isinstance(trainer_username, str) or not trainer_username.strip():
         raise ValueError('classlive.security.trainer_username invalide.')
-    return Settings(trainer_username=trainer_username, trainer_password=trainer_password, workdir=workdir, events_dir=events_dir, host=host, port=port,
-                    log_level=level.upper(), api_key=api_key, cors_origins=tuple(cors_origins))
+
+    session = _mapping(config.get('session'), 'session')
+    max_students = session.get('max_students', 300)
+    if type(max_students) is not int or not 0 <= max_students <= 100000:
+        raise ValueError('classlive.session.max_students doit être un entier entre 0 (illimité) et 100000.')
+    retention_days = session.get('retention_days', 365)
+    if type(retention_days) is not int or not 0 <= retention_days <= 36500:
+        raise ValueError('classlive.session.retention_days doit être un entier entre 0 (désactivé) et 36500.')
+
+    audit_cfg = _mapping(config.get('audit'), 'audit')
+    audit_enabled = audit_cfg.get('enabled', True)
+    if not isinstance(audit_enabled, bool):
+        raise ValueError('classlive.audit.enabled doit être un booléen.')
+    audit_file = audit_cfg.get('file')
+    if audit_file is not None and (not isinstance(audit_file, str) or not audit_file.strip()):
+        raise ValueError('classlive.audit.file doit être un chemin non vide ou null.')
+
+    export_cfg = _mapping(config.get('export'), 'export')
+    export_max_zip_mb = export_cfg.get('max_zip_mb', 50)
+    if type(export_max_zip_mb) is not int or not 1 <= export_max_zip_mb <= 2048:
+        raise ValueError('classlive.export.max_zip_mb doit être un entier entre 1 et 2048.')
+
+    accounts_raw = security.get('trainer_accounts', [])
+    if not isinstance(accounts_raw, list):
+        raise ValueError('classlive.security.trainer_accounts doit être une liste de {username, password}.')
+    accounts = []
+    for acc in accounts_raw:
+        if not isinstance(acc, dict) or not isinstance(acc.get('username'), str) or not acc['username'].strip() \
+                or not isinstance(acc.get('password'), str) or len(acc['password']) < 8:
+            raise ValueError('Chaque compte trainer_accounts doit avoir username non vide et password >= 8 caractères.')
+        accounts.append((acc['username'], acc['password']))
+
+    audit_path = Path(audit_file).expanduser() if audit_file else (workdir / 'audit.log')
+    return Settings(trainer_username=trainer_username, trainer_password=trainer_password,
+                    trainer_accounts=tuple(accounts), workdir=workdir, events_dir=events_dir, host=host, port=port,
+                    log_level=level.upper(), api_key=api_key, cors_origins=tuple(cors_origins),
+                    max_students=max_students, retention_days=retention_days, audit_enabled=audit_enabled,
+                    audit_file=audit_path if audit_enabled else None, export_max_zip_mb=export_max_zip_mb)

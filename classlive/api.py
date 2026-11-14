@@ -1,20 +1,22 @@
 """Contrats HTTP publics de ClassLive (v1)."""
 from __future__ import annotations
 
-from importlib.resources import files
-
+import io
+import json
 import logging
 import time
+import zipfile
+from importlib.resources import files
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field, model_validator
 
 from classlive import __version__
 from classlive.config import Settings, load_settings
-from classlive.storage import EventStorage, InvalidName, ResourceConflict, ResourceNotFound, StorageError
-from classlive.slides import SlideStorage
+from classlive.storage import EVENT_RE, EventStorage, InvalidName, ResourceConflict, ResourceNotFound, StorageError
+from classlive.slides import SLIDE_RE, SlideStorage
 from classlive.navigation import SlideNavigator
 from classlive.live import LiveStore
 from classlive.live_api import install_live_api
@@ -84,9 +86,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     storage = EventStorage(cfg.workdir, cfg.events_dir)
     slides = SlideStorage(storage)
     navigator = SlideNavigator(slides)
-    live = LiveStore(cfg.workdir / "classlive.db", slides)
+    # Sans load_settings (Settings construit à la main), audit_file vaut None : repli par défaut.
+    audit_file = cfg.audit_file if cfg.audit_file is not None else (cfg.workdir / "audit.log" if cfg.audit_enabled else None)
+    live = LiveStore(cfg.workdir / "classlive.db", slides, audit_file=audit_file, max_students=cfg.max_students)
     # Échec immédiat au démarrage si le stockage est inutilisable.
     storage.init()
+    # Purge automatique des sessions terminées trop anciennes (rétention configurée).
+    if cfg.retention_days > 0:
+        live.purge(cfg.retention_days)
     guide_path = cfg.workdir / "GUIDE_CLASSLIVE.md"
     # Ne pas écraser les adaptations locales du guide lors d'une mise à jour.
     if not guide_path.exists():
@@ -187,6 +194,86 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.info("Événement dupliqué : %s/%s -> %s", result["group"], result["title"], result["new_title"])
         return {"success": True, **result}
 
+    @router.post("/groups/{group}/duplicate", tags=["Groupes"])
+    def duplicate_group(group: str, payload: DuplicateRequest | None = None):
+        new_name = payload.new_title if payload else None
+        result = storage.duplicate_group(group, new_name)
+        logger.info("Groupe dupliqué : %s -> %s", result["group"], result["new_name"])
+        return {"success": True, **result}
+
+    @router.delete("/groups/{group}/events/{event}/students-data", tags=["RGPD"])
+    def forget_student(group: str, event: str, nom: str = Query(min_length=1), prenom: str = Query(min_length=1)):
+        """Droit à l'oubli : supprime toutes les participations d'un élève sur un événement."""
+        return live.forget_student(group, event, nom.strip(), prenom.strip())
+
+    @router.get("/groups/{group}/events/{event}/export.zip", tags=["Événements"])
+    def export_event_zip(group: str, event: str):
+        g, parent = slides._parent(group, event)
+        buffer = io.BytesIO()
+        manifest = {"format": "classlive-event", "version": 1, "group": g.name, "event": parent.name,
+                    "slides": [p.name for p in slides._slides(parent)]}
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
+            for p in slides._slides(parent):
+                zf.write(p, p.name)
+        logger.info("Export ZIP de l'événement %s/%s (%d slides)", g.name, parent.name, len(manifest["slides"]))
+        return Response(content=buffer.getvalue(), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{parent.name}.zip"'})
+
+    @router.post("/groups/{group}/import.zip", tags=["Événements"], status_code=200)
+    async def import_event_zip(group: str, request: Request):
+        """Importe un événement depuis un ZIP produit par export.zip (manifest.json + slides Sxxx_*.md).
+        Le ZIP est envoyé en corps brut (application/zip), sans multipart."""
+        data = await request.body()
+        limit = cfg.export_max_zip_mb * 1024 * 1024
+        if not data:
+            raise HTTPException(status_code=422, detail="Fichier ZIP vide.")
+        if len(data) > limit:
+            raise HTTPException(status_code=413, detail=f"ZIP trop volumineux (max {cfg.export_max_zip_mb} Mo).")
+        try:
+            zf = zipfile.ZipFile(io.BytesIO(data))
+        except zipfile.BadZipFile as exc:
+            raise HTTPException(status_code=422, detail=f"ZIP invalide : {exc}") from exc
+        with zf:
+            names = zf.namelist()
+            if "manifest.json" not in names:
+                raise HTTPException(status_code=422, detail="manifest.json manquant dans le ZIP.")
+            try:
+                manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=422, detail=f"manifest.json illisible : {exc}") from exc
+            if not isinstance(manifest, dict) or manifest.get("format") != "classlive-event" \
+                    or not isinstance(manifest.get("event"), str) or not manifest["event"].strip():
+                raise HTTPException(status_code=422, detail="manifest.json invalide (format classlive-event requis).")
+            slides_infos = manifest.get("slides")
+            if not isinstance(slides_infos, list) or not slides_infos \
+                    or any(not isinstance(s, str) or not SLIDE_RE.fullmatch(s) for s in slides_infos):
+                raise HTTPException(status_code=422, detail="manifest.json : liste de slides Sxxx_[CAORQT]_*.md requise.")
+            for name in slides_infos:
+                if name not in names:
+                    raise HTTPException(status_code=422, detail=f"Slide {name} absente du ZIP.")
+            # Valide tout le contenu avant de créer quoi que ce soit.
+            contents = {}
+            for name in slides_infos:
+                try:
+                    contents[name] = zf.read(name).decode("utf-8")
+                except (UnicodeError, KeyError) as exc:
+                    raise HTTPException(status_code=422, detail=f"Slide {name} illisible : {exc}") from exc
+            # create_event refuse un identifiant Exxx_ complet : on importe le libellé seul.
+            event_name = manifest["event"]
+            match = EVENT_RE.fullmatch(event_name)
+            title = match.group(2) if match else event_name
+            created = storage.create_event(group, title)
+            g, parent = slides._parent(created["group"], created["title"])
+            written = []
+            for name in slides_infos:
+                (parent / name).write_text(contents[name], encoding="utf-8")
+                written.append(name)
+        live.audit("formateur", "import_zip", f"{created['group']}/{created['title']} ({len(written)} slides)")
+        logger.info("Import ZIP : %s/%s (%d slides)", created["group"], created["title"], len(written))
+        return {"success": True, "group": created["group"], "event": created["title"],
+                "created": created["created"], "slides": written}
+
     @router.patch("/groups/{group}", tags=["Groupes"])
     def rename_group(group: str, payload: RenameRequest):
         resolved = storage._group(group).name
@@ -239,11 +326,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @router.put("/groups/{group}/events/{event}/slides/{slide}/content", tags=["Slides"])
     def update_slide_content(group: str, event: str, slide: str, payload: SlideContentRequest):
-        return {"success": True, **slides.update_content(group, event, slide, payload.content)}
+        old = slides.read(group, event, slide)['content']
+        result = slides.update_content(group, event, slide, payload.content)
+        live.record_slide_version(group, event, slide, old, 'formateur')
+        return {"success": True, **result}
+
+    @router.get("/groups/{group}/events/{event}/slides/{slide}/versions", tags=["Slides"])
+    def slide_versions(group: str, event: str, slide: str):
+        return live.slide_versions(group, event, slide)
+
+    @router.get("/groups/{group}/events/{event}/slides/{slide}/versions/{vid}", tags=["Slides"])
+    def slide_version(group: str, event: str, slide: str, vid: int):
+        return live.slide_version(group, event, slide, vid)
+
+    @router.post("/groups/{group}/events/{event}/slides/{slide}/versions/{vid}/restore", tags=["Slides"])
+    def restore_slide_version(group: str, event: str, slide: str, vid: int):
+        return live.restore_slide_version(group, event, slide, vid, actor='formateur')
 
     @router.delete("/groups/{group}/events/{event}/slides/{slide}", tags=["Slides"])
     def delete_slide(group: str, event: str, slide: str):
         return {"success": True, **slides.delete(group, event, slide)}
+
+    @router.get("/stats/usage", tags=["Système"])
+    def usage_stats():
+        return live.usage_stats()
+
+    @router.post("/admin/purge", tags=["Système"])
+    def purge_sessions():
+        """Purge manuelle des sessions terminées selon la rétention configurée."""
+        return live.purge(cfg.retention_days)
+
+    @router.get("/audit", tags=["Système"])
+    def audit_log(limit: int = Query(default=200, ge=1, le=1000)):
+        return live.audit_list(limit)
 
     # Lecteur séquentiel : chaque session client a sa propre position.
     @router.post("/player/select", tags=["Lecture"])

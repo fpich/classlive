@@ -356,6 +356,28 @@ class EventStorage:
                 raise StorageError(f'Impossible de supprimer l’événement : {exc}') from exc
             return {'group': parent.name, 'title': path.name, 'deleted': True}
 
+    def duplicate_group(self, group: str, new_name: str | None = None) -> dict:
+        """Copie un groupe entier (événements et slides) vers un nouvel identifiant Gxxx."""
+        with self._lock:
+            source = self._group(group)
+            identifier = self._reserve_id('group')
+            base = normalize_name(new_name) if new_name is not None else GROUP_RE.fullmatch(source.name).group(2) + '_copie'
+            peers = self._items(self.root, GROUP_RE)
+            normalized = base
+            suffix = 1
+            while any(p.name.split('_', 1)[1].casefold() == normalized.casefold() for p in peers):
+                suffix += 1
+                if suffix > 100:
+                    raise ResourceConflict('Impossible de trouver un nom de copie disponible.')
+                normalized = f'{base}_{suffix}'
+            target = self.root / f'G{identifier:03d}_{normalized}'
+            self._check_no_symlinks(source)
+            try:
+                shutil.copytree(source, target, symlinks=False)
+            except OSError as exc:
+                raise StorageError(f'Impossible de dupliquer le groupe : {exc}') from exc
+            return {'group': source.name, 'new_name': target.name, 'duplicated': True, 'path': str(target)}
+
     def delete_group(self, group: str) -> dict:
         with self._lock:
             path = self._group(group)

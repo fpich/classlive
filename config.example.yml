@@ -15,3 +15,18 @@ classlive:
     # Origines autorisées en CORS pour un frontend séparé (Vite/React).
     # "*" = tout le LAN (HTTP non chiffré, réservé au réseau de confiance).
     cors_origins: ["*"]
+    # Comptes formateurs supplémentaires (en plus de CLASSLIVE_TRAINER_PASSWORD).
+    trainer_accounts:
+      - { username: "prof2", password: "mot-de-passe-min-8-car" }
+  session:
+    # Nombre max d'élèves par session (0 = illimité).
+    max_students: 300
+    # Rétention des sessions terminées en jours (0 = jamais de purge auto).
+    retention_days: 365
+  audit:
+    enabled: true
+    # Fichier journal d'audit (défaut: <workdir>/audit.log).
+    file: null
+  export:
+    # Taille max d'un export ZIP d'événement, en Mo.
+    max_zip_mb: 50

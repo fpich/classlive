@@ -5,12 +5,13 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import secrets
 import sqlite3
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from classlive.slides import SLIDE_RE, SlideStorage
 from classlive.storage import ResourceConflict, ResourceNotFound
 
 EXERCISES = set('AORQT')
+
+logger = logging.getLogger("classlive")
 
 
 def now() -> str:
@@ -49,11 +52,14 @@ def prepare_markdown(markdown: str) -> tuple[str, object | None]:
 
 
 class LiveStore:
-    def __init__(self, db_path: Path, slides: SlideStorage):
+    def __init__(self, db_path: Path, slides: SlideStorage, audit_file: Path | None = None, max_students: int = 300):
         self.path = db_path
         self.slides = slides
         self.lock = threading.RLock()
         self.connections: dict[str, dict[str, float]] = {}
+        self.audit_file = audit_file
+        self.max_students = max_students
+        self.online_counter = None  # callable(live_id) -> int, installé par live_api (Hub WS)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.db() as con:
             con.executescript('''
@@ -96,6 +102,29 @@ class LiveStore:
               slide_number INTEGER NOT NULL, started_at TEXT NOT NULL,
               PRIMARY KEY(participation_id, slide_number)
             );
+            CREATE TABLE IF NOT EXISTS audit_log (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, actor TEXT NOT NULL,
+              action TEXT NOT NULL, detail TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS questions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              live_id TEXT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+              participation_id TEXT NOT NULL REFERENCES participations(id) ON DELETE CASCADE,
+              text TEXT NOT NULL, asked_at TEXT NOT NULL,
+              answered INTEGER NOT NULL DEFAULT 0, answer_text TEXT, answered_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS reactions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              live_id TEXT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+              participation_id TEXT NOT NULL REFERENCES participations(id) ON DELETE CASCADE,
+              emoji TEXT NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS slide_versions (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              group_name TEXT NOT NULL, event_name TEXT NOT NULL, slide TEXT NOT NULL,
+              content TEXT NOT NULL, ts TEXT NOT NULL, actor TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS slide_versions_lookup ON slide_versions(group_name, event_name, slide, id);
             ''')
             # Migration non destructive des bases créées avec la v0.7.0.
             columns = {row['name'] for row in con.execute('PRAGMA table_info(live_sessions)')}
@@ -269,6 +298,10 @@ class LiveStore:
         with self.lock, self.db() as con:
             session = con.execute("SELECT * FROM live_sessions WHERE code=? AND status='running'", (code,)).fetchone()
             self.fail_if_missing(session, 'Code de session active')
+            if self.max_students > 0:
+                count = con.execute('SELECT COUNT(*) AS n FROM participations WHERE live_id=?', (session['id'],)).fetchone()['n']
+                if count >= self.max_students:
+                    raise ResourceConflict(f'Session pleine ({self.max_students} élèves max).')
             pid = str(uuid.uuid4())
             token = secrets.token_urlsafe(32)
             digest = hashlib.sha256(token.encode()).hexdigest()
@@ -349,10 +382,17 @@ class LiveStore:
             numbers = [s['number'] for s in slides]
             i = numbers.index(number)
             locked = self._slide_locked(con, student['id'], number) if live['mode'] == 'autonome' else False
+            if self.online_counter is not None:
+                online = self.online_counter(live['id'])
+            else:
+                cutoff = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+                online = con.execute('SELECT COUNT(*) AS n FROM participations WHERE live_id=? AND last_seen>=?',
+                                     (live['id'], cutoff)).fetchone()['n']
             result = {'live_id': live['id'], 'status': live['status'], 'mode': live['mode'],
                       'group': live['group_name'], 'event': live['event_name'],
                       'slide': snap['filename'], 'slide_type': snap['kind'], 'number': number,
                       'position': i + 1, 'total': len(numbers), 'revision': live['revision'],
+                      'online': online,
                       'content': snap['public_content'], 'finished': bool(finished)}
             if live['mode'] == 'autonome':
                 result['locked'] = locked
@@ -681,3 +721,190 @@ class LiveStore:
                 con.execute('DELETE FROM live_sessions WHERE id=?',(lid,))
                 self.connections.pop(lid,None)
         return {'deleted_sessions':len(ids),'group':found['group'],'event':found['event']}
+
+    # ── Audit ────────────────────────────────────────────────────────────────
+
+    def audit(self, actor, action, detail=''):
+        line = {'ts': now(), 'actor': actor, 'action': action, 'detail': detail}
+        try:
+            with self.lock, self.db() as con:
+                con.execute('INSERT INTO audit_log(ts,actor,action,detail) VALUES (?,?,?,?)',
+                            (line['ts'], actor, action, detail))
+            if self.audit_file is not None:
+                with open(self.audit_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(line, ensure_ascii=False) + '\n')
+        except OSError:
+            logger.warning("Audit log fichier illisible: %s", self.audit_file)
+
+    def audit_list(self, limit=200):
+        with self.db() as con:
+            rows = con.execute('SELECT ts,actor,action,detail FROM audit_log ORDER BY id DESC LIMIT ?', (limit,)).fetchall()
+        return {'entries': [dict(r) for r in reversed(rows)]}
+
+    # ── Droit à l'oubli (RGPD) ────────────────────────────────────────────────
+
+    def forget_student(self, group, event, nom, prenom):
+        """Supprime toutes les participations (et données en cascade) d'un élève sur un événement."""
+        g, parent = self.slides._parent(group, event)
+        with self.lock, self.db() as con:
+            sessions = con.execute('SELECT id FROM live_sessions WHERE group_name=? AND event_name=?',
+                                   (g.name, parent.name)).fetchall()
+            deleted = 0
+            for s in sessions:
+                cur = con.execute('DELETE FROM participations WHERE live_id=? AND nom=? AND prenom=?',
+                                  (s['id'], nom, prenom))
+                deleted += cur.rowcount
+        self.audit('formateur', 'forget_student', f'{g.name}/{parent.name} {nom} {prenom} ({deleted} participations)')
+        return {'deleted_participations': deleted, 'group': g.name, 'event': parent.name, 'nom': nom, 'prenom': prenom}
+
+    # ── Purge rétention + stats d'usage ──────────────────────────────────────
+
+    def purge(self, retention_days):
+        """Supprime les sessions terminées de plus de retention_days jours."""
+        if retention_days <= 0:
+            return {'deleted_sessions': 0, 'retention_days': retention_days}
+        cutoff = datetime.fromtimestamp(time.time() - retention_days * 86400, timezone.utc).isoformat()
+        with self.lock, self.db() as con:
+            rows = con.execute("SELECT id FROM live_sessions WHERE status='ended' AND ended_at IS NOT NULL AND ended_at < ?",
+                               (cutoff,)).fetchall()
+            ids = [r['id'] for r in rows]
+            for lid in ids:
+                con.execute('DELETE FROM live_sessions WHERE id=?', (lid,))
+                self.connections.pop(lid, None)
+        self.audit('system', 'purge', f'{len(ids)} sessions supprimées (rétention {retention_days} j)')
+        return {'deleted_sessions': len(ids), 'retention_days': retention_days, 'cutoff': cutoff}
+
+    def usage_stats(self):
+        with self.db() as con:
+            groups = con.execute('SELECT COUNT(*) AS n FROM (SELECT DISTINCT group_name FROM live_sessions)').fetchone()['n']
+            events = con.execute('SELECT COUNT(DISTINCT group_name || "/" || event_name) AS n FROM live_sessions').fetchone()['n']
+            sessions = con.execute('SELECT COUNT(*) AS n, SUM(status="running") AS running, SUM(status="ended") AS ended FROM live_sessions').fetchone()
+            parts = con.execute('SELECT COUNT(*) AS n FROM participations').fetchone()['n']
+            subs = con.execute('SELECT COUNT(*) AS n FROM submissions').fetchone()['n']
+            questions = con.execute('SELECT COUNT(*) AS n FROM questions').fetchone()['n']
+            reactions = con.execute('SELECT COUNT(*) AS n FROM reactions').fetchone()['n']
+            per_event = con.execute('''SELECT group_name, event_name, COUNT(*) AS sessions,
+                SUM(status='ended') AS ended FROM live_sessions GROUP BY group_name, event_name ORDER BY group_name, event_name''').fetchall()
+        return {'groups': groups, 'events': events,
+                'sessions': {'total': sessions['n'], 'running': sessions['running'] or 0, 'ended': sessions['ended'] or 0},
+                'participations': parts, 'answers': subs, 'questions': questions, 'reactions': reactions,
+                'per_event': [dict(r) for r in per_event]}
+
+    # ── Q&A élève ────────────────────────────────────────────────────────────
+
+    def ask_question(self, student, text):
+        if not isinstance(text, str) or not text.strip() or len(text) > 1000:
+            raise ValueError('Question texte requise (1000 caractères max).')
+        with self.lock, self.db() as con:
+            live = self._live(con, student['live_id'])
+            if live['status'] != 'running':
+                raise ResourceConflict('La session est terminée.')
+            count = con.execute('SELECT COUNT(*) AS n FROM questions WHERE participation_id=?', (student['id'],)).fetchone()['n']
+            if count >= 50:
+                raise ResourceConflict('Limite de 50 questions par élève atteinte.')
+            stamp = now()
+            cur = con.execute('INSERT INTO questions(live_id,participation_id,text,asked_at) VALUES (?,?,?,?)',
+                              (live['id'], student['id'], text.strip(), stamp))
+            con.execute('UPDATE participations SET last_seen=? WHERE id=?', (stamp, student['id']))
+            return {'question_id': cur.lastrowid, 'asked_at': stamp}
+
+    def my_questions(self, student):
+        with self.db() as con:
+            self._live(con, student['live_id'])
+            rows = con.execute('SELECT id,text,asked_at,answered,answer_text,answered_at FROM questions WHERE participation_id=? ORDER BY id',
+                               (student['id'],)).fetchall()
+        return {'questions': [dict(r) for r in rows]}
+
+    def list_questions(self, lid):
+        with self.db() as con:
+            self._live(con, lid)
+            rows = con.execute('''SELECT q.id,q.text,q.asked_at,q.answered,q.answer_text,q.answered_at,
+                p.nom,p.prenom,q.participation_id FROM questions q JOIN participations p ON p.id=q.participation_id
+                WHERE q.live_id=? ORDER BY q.id''', (lid,)).fetchall()
+        return {'live_id': lid, 'questions': [dict(r) for r in rows]}
+
+    def answer_question(self, lid, qid, text):
+        if not isinstance(text, str) or not text.strip() or len(text) > 2000:
+            raise ValueError('Réponse texte requise (2000 caractères max).')
+        with self.lock, self.db() as con:
+            self._live(con, lid)
+            row = con.execute('SELECT * FROM questions WHERE id=? AND live_id=?', (qid, lid)).fetchone()
+            if row is None:
+                raise ResourceNotFound('Question introuvable.')
+            stamp = now()
+            con.execute('UPDATE questions SET answered=1,answer_text=?,answered_at=? WHERE id=?', (text.strip(), stamp, qid))
+            return {'question_id': qid, 'answered': True, 'answer_text': text.strip(), 'answered_at': stamp,
+                    'participation_id': row['participation_id']}
+
+    def toggle_question(self, lid, qid):
+        with self.lock, self.db() as con:
+            self._live(con, lid)
+            row = con.execute('SELECT answered FROM questions WHERE id=? AND live_id=?', (qid, lid)).fetchone()
+            if row is None:
+                raise ResourceNotFound('Question introuvable.')
+            new = 0 if row['answered'] else 1
+            con.execute('UPDATE questions SET answered=? WHERE id=?', (new, qid))
+            return {'question_id': qid, 'answered': bool(new)}
+
+    # ── Réactions emoji ──────────────────────────────────────────────────────
+
+    def react(self, student, emoji):
+        if not isinstance(emoji, str) or not emoji.strip() or len(emoji) > 8:
+            raise ValueError('Emoji requis (8 caractères max).')
+        with self.lock, self.db() as con:
+            live = self._live(con, student['live_id'])
+            if live['status'] != 'running':
+                raise ResourceConflict('La session est terminée.')
+            stamp = now()
+            con.execute('INSERT INTO reactions(live_id,participation_id,emoji,ts) VALUES (?,?,?,?)',
+                        (live['id'], student['id'], emoji.strip(), stamp))
+            con.execute('UPDATE participations SET last_seen=? WHERE id=?', (stamp, student['id']))
+            counts = con.execute('SELECT emoji, COUNT(*) AS n FROM reactions WHERE live_id=? GROUP BY emoji ORDER BY n DESC',
+                                 (live['id'],)).fetchall()
+            return {'emoji': emoji.strip(), 'counts': {r['emoji']: r['n'] for r in counts}}
+
+    def reactions(self, lid):
+        with self.db() as con:
+            self._live(con, lid)
+            rows = con.execute('SELECT emoji, COUNT(*) AS n FROM reactions WHERE live_id=? GROUP BY emoji ORDER BY n DESC', (lid,)).fetchall()
+        return {'live_id': lid, 'total': sum(r['n'] for r in rows), 'counts': {r['emoji']: r['n'] for r in rows}}
+
+    # ── Historique des éditions de slides (max 50 versions par slide) ───────
+
+    SLIDE_VERSIONS_MAX = 50
+
+    def record_slide_version(self, group, event, slide, content, actor):
+        g, parent = self.slides._parent(group, event)
+        with self.lock, self.db() as con:
+            con.execute('INSERT INTO slide_versions(group_name,event_name,slide,content,ts,actor) VALUES (?,?,?,?,?,?)',
+                        (g.name, parent.name, slide, content, now(), actor))
+            con.execute('''DELETE FROM slide_versions WHERE group_name=? AND event_name=? AND slide=? AND id NOT IN (
+                SELECT id FROM slide_versions WHERE group_name=? AND event_name=? AND slide=? ORDER BY id DESC LIMIT ?)''',
+                        (g.name, parent.name, slide, g.name, parent.name, slide, self.SLIDE_VERSIONS_MAX))
+
+    def slide_versions(self, group, event, slide):
+        g, parent = self.slides._parent(group, event)
+        self.slides._resolve(parent, slide)  # 404 si slide inexistante
+        with self.db() as con:
+            rows = con.execute('SELECT id,ts,actor,LENGTH(content) AS size FROM slide_versions WHERE group_name=? AND event_name=? AND slide=? ORDER BY id DESC',
+                               (g.name, parent.name, slide)).fetchall()
+        return {'group': g.name, 'event': parent.name, 'slide': slide, 'versions': [dict(r) for r in rows]}
+
+    def slide_version(self, group, event, slide, vid):
+        g, parent = self.slides._parent(group, event)
+        with self.db() as con:
+            row = con.execute('SELECT * FROM slide_versions WHERE id=? AND group_name=? AND event_name=? AND slide=?',
+                              (vid, g.name, parent.name, slide)).fetchone()
+        if row is None:
+            raise ResourceNotFound('Version introuvable.')
+        return dict(row)
+
+    def restore_slide_version(self, group, event, slide, vid, actor):
+        """Restaure une ancienne version : l'état courant est d'abord archivé."""
+        version = self.slide_version(group, event, slide, vid)
+        current = self.slides.read(group, event, slide)['content']
+        if current != version['content']:
+            self.record_slide_version(group, event, slide, current, actor)
+        result = self.slides.update_content(group, event, slide, version['content'])
+        self.audit(actor, 'slide_restore', f'{group}/{event}/{slide} version {vid}')
+        return {'success': True, 'restored_version': vid, **result}

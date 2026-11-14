@@ -504,3 +504,84 @@ def test_openapi_routes_complet(client):
     assert '/api/v1/live/start' in paths
     assert '/api/v1/student/ws' not in paths  # WS pas dans OpenAPI
     assert '/health' in paths
+
+
+# ── Configuration : nouvelles sections (session, audit, export, comptes) ────
+
+_BASE = 'classlive:\n  storage:\n    workdir: "/tmp/x"\n'
+
+
+def test_config_session_max_students_invalides(tmp_path):
+    for bad in ('-1', '100001', '"300"', '3.5', 'true'):
+        cfg = _write_cfg(tmp_path, _BASE + f'  session:\n    max_students: {bad}\n')
+        with pytest.raises(ValueError, match="max_students"):
+            load_settings(cfg)
+
+
+def test_config_session_retention_invalide(tmp_path):
+    for bad in ('-1', '36501', '"365"'):
+        cfg = _write_cfg(tmp_path, _BASE + f'  session:\n    retention_days: {bad}\n')
+        with pytest.raises(ValueError, match="retention_days"):
+            load_settings(cfg)
+    cfg = _write_cfg(tmp_path, _BASE + '  session: "x"\n')
+    with pytest.raises(ValueError, match="session"):
+        load_settings(cfg)
+    cfg = _write_cfg(tmp_path, _BASE + '  session:\n    max_students: 0\n    retention_days: 0\n')
+    s = load_settings(cfg)
+    assert s.max_students == 0 and s.retention_days == 0
+
+
+def test_config_audit_invalide(tmp_path):
+    cfg = _write_cfg(tmp_path, _BASE + '  audit: "x"\n')
+    with pytest.raises(ValueError, match="audit"):
+        load_settings(cfg)
+    cfg = _write_cfg(tmp_path, _BASE + '  audit:\n    enabled: "oui"\n')
+    with pytest.raises(ValueError, match="enabled"):
+        load_settings(cfg)
+    cfg = _write_cfg(tmp_path, _BASE + '  audit:\n    file: "  "\n')
+    with pytest.raises(ValueError, match="audit.file"):
+        load_settings(cfg)
+    cfg = _write_cfg(tmp_path, _BASE + '  audit:\n    enabled: false\n')
+    assert load_settings(cfg).audit_file is None
+    cfg = _write_cfg(tmp_path, _BASE + '  audit:\n    file: "/tmp/audit.log"\n')
+    assert str(load_settings(cfg).audit_file) == "/tmp/audit.log"
+
+
+def test_config_export_invalide(tmp_path):
+    cfg = _write_cfg(tmp_path, _BASE + '  export: "x"\n')
+    with pytest.raises(ValueError, match="export"):
+        load_settings(cfg)
+    for bad in ('0', '2049', '"50"'):
+        cfg = _write_cfg(tmp_path, _BASE + f'  export:\n    max_zip_mb: {bad}\n')
+        with pytest.raises(ValueError, match="max_zip_mb"):
+            load_settings(cfg)
+
+
+def test_config_trainer_accounts_invalides(tmp_path):
+    cfg = _write_cfg(tmp_path, _BASE + '  security:\n    trainer_accounts: "x"\n')
+    with pytest.raises(ValueError, match="trainer_accounts"):
+        load_settings(cfg)
+    for bad in ('      - username: prof2\n',  # password manquant
+                '      - username: prof2\n        password: "court"\n',  # < 8 caractères
+                '      - username: ""\n        password: "longueur-ok"\n',
+                '      - password: "longueur-ok"\n',
+                '      - 42\n'):
+        cfg = _write_cfg(tmp_path, _BASE + '  security:\n    trainer_accounts:\n' + bad)
+        with pytest.raises(ValueError, match="trainer_accounts"):
+            load_settings(cfg)
+
+
+def test_config_toutes_sections_valides(tmp_path):
+    cfg = _write_cfg(tmp_path, _BASE + (
+        '  session:\n    max_students: 120\n    retention_days: 30\n'
+        '  audit:\n    enabled: true\n    file: "/tmp/audit-test.log"\n'
+        '  export:\n    max_zip_mb: 10\n'
+        '  security:\n    trainer_accounts:\n'
+        '      - username: prof2\n        password: "motdepasse2"\n'
+        '      - username: prof3\n        password: "motdepasse3"\n'
+    ))
+    s = load_settings(cfg)
+    assert s.max_students == 120 and s.retention_days == 30
+    assert s.audit_enabled and str(s.audit_file) == "/tmp/audit-test.log"
+    assert s.export_max_zip_mb == 10
+    assert s.trainer_accounts == (("prof2", "motdepasse2"), ("prof3", "motdepasse3"))

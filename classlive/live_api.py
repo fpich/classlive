@@ -45,6 +45,18 @@ class Submit(BaseModel):
     answer: dict[str, Any]
 
 
+class QuestionText(BaseModel):
+    text: str
+
+
+class AnswerText(BaseModel):
+    text: str
+
+
+class Reaction(BaseModel):
+    emoji: str
+
+
 class ChangePassword(BaseModel):
     old_password: str
     new_password: str = Field(min_length=8, max_length=200)
@@ -69,19 +81,27 @@ class Auth:
         attempts.append(now)
         self._login_attempts[client_ip] = attempts
 
+    def _check_credentials(self, username: str, password: str) -> bool:
+        if self._password and hmac.compare_digest(username, self.cfg.trainer_username) \
+                and hmac.compare_digest(password, self._password):
+            return True
+        return any(hmac.compare_digest(username, u) and hmac.compare_digest(password, p)
+                   for u, p in self.cfg.trainer_accounts)
+
     def login(self, payload: Login, client_ip: str = 'unknown'):
         self._check_rate_limit(client_ip)
-        if not self._password:
-            raise HTTPException(status_code=503,detail='Configurer CLASSLIVE_TRAINER_PASSWORD avant de se connecter.')
-        if (not hmac.compare_digest(payload.username,self.cfg.trainer_username)
-                or not hmac.compare_digest(payload.password,self._password)):
+        if not self._password and not self.cfg.trainer_accounts:
+            raise HTTPException(status_code=503,detail='Configurer CLASSLIVE_TRAINER_PASSWORD ou security.trainer_accounts avant de se connecter.')
+        if not self._check_credentials(payload.username, payload.password):
+            self.store.audit(payload.username, 'login_failed', f'ip={client_ip}')
             raise HTTPException(status_code=401,detail='Identifiants invalides.')
         token=secrets.token_urlsafe(32)
         self.trainers[token]=time.monotonic()+8*3600
+        self.store.audit(payload.username, 'login', f'ip={client_ip}')
         return {'access_token':token,'token_type':'bearer','expires_in':28800,'role':'trainer'}
 
-    def change_password(self, old: str, new: str, client_ip: str = 'unknown'):
-        """Change le mot de passe en mémoire (effectif jusqu'au redémarrage) et invalide tous les jetons."""
+    def change_password(self, old: str, new: str, client_ip: str = 'unknown', username: str = 'formateur'):
+        """Change le mot de passe du compte principal en mémoire (jusqu'au redémarrage) et invalide tous les jetons."""
         self._check_rate_limit(client_ip)
         if not self._password:
             raise HTTPException(status_code=503,detail='Aucun mot de passe formateur configuré.')
@@ -91,6 +111,7 @@ class Auth:
             raise HTTPException(status_code=422,detail='Le nouveau mot de passe doit faire au moins 8 caractères.')
         self._password=new
         self.trainers.clear()
+        self.store.audit(username, 'change_password', f'ip={client_ip}')
         return {'changed':True}
 
     def valid_trainer(self, token: str) -> bool:
@@ -159,6 +180,8 @@ class Hub:
 def install_live_api(app, cfg: Settings, store: LiveStore):
     auth=Auth(cfg,store)
     hub=Hub()
+    # Nombre d'élèves réellement connectés en WebSocket (visible dans student_state).
+    store.online_counter=lambda lid: len(hub.by_pid.get(lid,{}))
     app.state.live_store=store
     app.state.live_auth=auth
     app.state.live_hub=hub
@@ -173,7 +196,8 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
     @student_routes.post('/auth/change-password', tags=['Authentification'])
     async def change_password(payload: ChangePassword, request: Request):
         client_ip = request.client.host if request.client else 'unknown'
-        result = auth.change_password(payload.old_password, payload.new_password, client_ip)
+        result = auth.change_password(payload.old_password, payload.new_password, client_ip,
+                                      username=cfg.trainer_username)
         await hub.close_all_trainers()  # invalide aussi les WS moniteur ouverts
         return result
 
@@ -181,10 +205,13 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
     def start(payload: Begin):
         correction = payload.correction or ('show' if payload.mode == 'live' else 'à_la_fin')
         try:
-            return store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
-                               timing_seconds=payload.timing_seconds, correction_mode=correction)
+            result = store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
+                                 timing_seconds=payload.timing_seconds, correction_mode=correction)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        store.audit(cfg.trainer_username, 'live_start',
+                    f"{result['group']}/{result['event']} mode={payload.mode} code={result['session_code']}")
+        return result
 
     async def movement(lid,direction,number=None):
         result=store.move(lid,direction,number)
@@ -223,6 +250,7 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
     @trainer_routes.post('/live/{live_id}/stop',tags=['Live formateur'])
     async def stop(live_id: str):
         result=store.stop(live_id)
+        store.audit(cfg.trainer_username, 'live_stop', f"{result['group']}/{result['event']} live_id={live_id}")
         await hub.publish(live_id,{'event':'live_ended','live_id':live_id})
         return result
 
@@ -245,6 +273,7 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
     @trainer_routes.delete('/live/{live_id}/students/{participation_id}',tags=['Live formateur'])
     async def kick_student(live_id: str, participation_id: str):
         result=store.kick(live_id,participation_id)
+        store.audit(cfg.trainer_username, 'student_kick', f'live_id={live_id} participation_id={participation_id}')
         await hub.publish(live_id,{'event':'student_kicked','participation_id':participation_id})
         return result
 
@@ -325,6 +354,62 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
             await hub.publish_to_student(student['live_id'],student['id'],
                                          {'event':'answer_locked','slide':result['slide']})
         return result
+
+    # ── Q&A élève pendant le live ───────────────────────────────────────────
+
+    @student_routes.post('/student/questions',tags=['Étudiants'])
+    async def ask(payload: QuestionText,student=Depends(auth.student)):
+        try:
+            result=store.ask_question(student,payload.text)
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        lid=student['live_id']
+        await hub.publish(lid,{'event':'question_asked','participation_id':student['id'],
+                               'question_id':result['question_id'],'nom':student['nom'],'prenom':student['prenom']},
+                          trainer_only=True)
+        return {'success':True,**result}
+
+    @student_routes.get('/student/questions',tags=['Étudiants'])
+    def my_questions(student=Depends(auth.student)):
+        return store.my_questions(student)
+
+    @trainer_routes.get('/live/{live_id}/questions',tags=['Live formateur'])
+    def list_questions(live_id: str):
+        return store.list_questions(live_id)
+
+    @trainer_routes.post('/live/{live_id}/questions/{qid}/answer',tags=['Live formateur'])
+    async def answer_question(live_id: str, qid: int, payload: AnswerText):
+        try:
+            result=store.answer_question(live_id,qid,payload.text)
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        await hub.publish_to_student(live_id,result['participation_id'],
+                                     {'event':'question_answered','question_id':qid,
+                                      'answer_text':result['answer_text'],'answered_at':result['answered_at']})
+        await hub.publish(live_id,{'event':'question_updated','question_id':qid,'answered':True},trainer_only=True)
+        return {'success':True,**result}
+
+    @trainer_routes.post('/live/{live_id}/questions/{qid}/toggle',tags=['Live formateur'])
+    async def toggle_question(live_id: str, qid: int):
+        result=store.toggle_question(live_id,qid)
+        await hub.publish(live_id,{'event':'question_updated','question_id':qid,'answered':result['answered']},trainer_only=True)
+        return {'success':True,**result}
+
+    # ── Réactions emoji en live ─────────────────────────────────────────────
+
+    @student_routes.post('/student/reaction',tags=['Étudiants'])
+    async def reaction(payload: Reaction,student=Depends(auth.student)):
+        try:
+            result=store.react(student,payload.emoji)
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        await hub.publish(student['live_id'],{'event':'reaction','participation_id':student['id'],
+                                              'emoji':result['emoji'],'counts':result['counts']})
+        return {'success':True,**result}
+
+    @trainer_routes.get('/live/{live_id}/reactions',tags=['Live formateur'])
+    def list_reactions(live_id: str):
+        return store.reactions(live_id)
 
     async def authorize_ws(ws: WebSocket, trainer: bool):
         await ws.accept()

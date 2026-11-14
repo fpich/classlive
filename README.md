@@ -156,6 +156,20 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `DELETE` | `/live/{live_id}/students/{participation_id}` | Retirer un participant (ses réponses sont supprimées) |
 | `GET` | `/events` | Liste globale de tous les événements de tous les groupes |
 | `POST` | `/groups/{group}/events/{event}/duplicate` | Dupliquer un événement avec toutes ses slides (`new_title` optionnel) |
+| `POST` | `/groups/{group}/duplicate` | Dupliquer un groupe entier (événements + slides, `new_title` optionnel) |
+| `GET` | `/groups/{group}/events/{event}/export.zip` | Exporter l'événement en ZIP (`manifest.json` + slides Markdown) |
+| `POST` | `/groups/{group}/import.zip` | Importer un ZIP d'événement (corps brut `application/zip`, taille limitée par `export.max_zip_mb`) |
+| `DELETE` | `/groups/{group}/events/{event}/students-data?nom=&prenom=` | Droit à l'oubli (RGPD) : supprime toutes les participations/réponses/questions/réactions de l'élève sur l'événement |
+| `GET` | `/groups/{group}/events/{event}/slides/{slide}/versions` | Historique des éditions d'une slide (50 versions max conservées) |
+| `GET` | `/groups/{group}/events/{event}/slides/{slide}/versions/{vid}` | Lire le contenu d'une ancienne version |
+| `POST` | `/groups/{group}/events/{event}/slides/{slide}/versions/{vid}/restore` | Restaurer une ancienne version (l'état courant est archivé d'abord) |
+| `GET` | `/live/{live_id}/questions` | Toutes les questions des élèves du Live |
+| `POST` | `/live/{live_id}/questions/{qid}/answer` | Répondre à une question (l'élève est notifié en WebSocket) |
+| `POST` | `/live/{live_id}/questions/{qid}/toggle` | Basculer le statut répondu/non répondu |
+| `GET` | `/live/{live_id}/reactions` | Compteurs d'emoji du Live |
+| `GET` | `/stats/usage` | Statistiques d'usage globales (sessions, participations, questions, réactions, par événement) |
+| `POST` | `/admin/purge` | Purge manuelle des sessions terminées selon `session.retention_days` |
+| `GET` | `/audit?limit=200` | Journal d'audit (max 1000 entrées) |
 | `POST` | `/auth/change-password` | Changer le mot de passe formateur en mémoire (effectif jusqu'au redémarrage ; invalide tous les jetons) |
 | `GET` | `/live/{live_id}/export.csv` | CSV de la session |
 | `GET` | `/groups/{group}/events/{event}/sessions` | Sessions actives et terminées |
@@ -194,6 +208,11 @@ Pour les appels suivants, envoyer `Authorization: Bearer STUDENT_SESSION_ID` :
 | `POST` | `/api/v1/student/next` | Avancer (autonome uniquement ; bloqué sur un exercice tant qu'aucune réponse validée) |
 | `POST` | `/api/v1/student/previous` | Reculer (toujours autorisé, lecture seule) |
 | `GET` | `/api/v1/student/results` | Son propre récapitulatif (autonome, session perso terminée uniquement) |
+| `POST` | `/api/v1/student/questions` | Poser une question au formateur (`{"text"}`, 1000 caractères max, 50 max par élève) |
+| `GET` | `/api/v1/student/questions` | Ses propres questions et les réponses reçues |
+| `POST` | `/api/v1/student/reaction` | Envoyer une réaction emoji (`{"emoji"}`, 8 caractères max), diffusée à tous |
+
+`GET /api/v1/student/current` retourne aussi `online` : le nombre d'élèves actuellement connectés en WebSocket.
 
 Exemple de soumission :
 
@@ -205,8 +224,8 @@ Aucune note n’est calculée ; le formateur peut consulter les réponses enregi
 
 ## WebSocket
 
-- `ws://SERVEUR:8080/api/v1/student/ws` : l'étudiant se connecte, envoie **en premier message JSON** `{"token":"STUDENT_SESSION_ID"}` (ne pas transmettre le secret dans l'URL), reçoit `{"event":"current","current":{...}}` et ensuite `slide_changed` / `correction_shown` / `correction_hidden` / `live_ended`. Envoyer `{"event":"ping"}` toutes les 20 secondes ; réponse `pong`. Une connexion silencieuse depuis plus de 45 secondes est comptée déconnectée.
-- `ws://SERVEUR:8080/api/v1/live/{live_id}/monitor` : le formateur envoie d'abord `{"token":"JETON_FORMATEUR"}`, reçoit `monitor`, puis `student_joined`, `student_connected`, `student_disconnected`, `answer_received`, `slide_changed`, `correction_shown`, `correction_hidden`, `live_ended`.
+- `ws://SERVEUR:8080/api/v1/student/ws` : l'étudiant se connecte, envoie **en premier message JSON** `{"token":"STUDENT_SESSION_ID"}` (ne pas transmettre le secret dans l'URL), reçoit `{"event":"current","current":{...}}` et ensuite `slide_changed` / `correction_shown` / `correction_hidden` / `live_ended` / `question_answered` / `reaction`. Envoyer `{"event":"ping"}` toutes les 20 secondes ; réponse `pong`. Une connexion silencieuse depuis plus de 45 secondes est comptée déconnectée.
+- `ws://SERVEUR:8080/api/v1/live/{live_id}/monitor` : le formateur envoie d'abord `{"token":"JETON_FORMATEUR"}`, reçoit `monitor`, puis `student_joined`, `student_connected`, `student_disconnected`, `answer_received`, `question_asked`, `question_updated`, `slide_changed`, `correction_shown`, `correction_hidden`, `live_ended`.
 - Présence en ligne calculée à partir des WebSockets actifs (mémoire du serveur), les participations et leurs dernières activités persistent en SQLite. Après redémarrage du service, les étudiants sont déconnectés jusqu'à reconnexion, sans perte de réponses.
 
 ## Export CSV
@@ -216,6 +235,39 @@ Uniquement CSV `;` avec encodage UTF-8 BOM pour Excel, colonnes : `live_id;nom;p
 ## Sécurité et exploitation
 
 Les noms/prénoms/réponses sont des données personnelles : informer les étudiants, protéger les sauvegardes, limiter l'accès au serveur et définir une politique de conservation. HTTP non chiffré : LAN de confiance exclusivement. Limiter l'accès au port 8080 et ne pas partager les jetons. Le service n'est **pas** prévu pour un déploiement à plusieurs workers ou plusieurs instances ; les sessions et résultats, eux, sont persistants en SQLite.
+
+## Configuration (`config.yml`)
+
+Toutes les fonctionnalités ont des **paramètres par défaut** ; tout ce qui est paramétrable est modifiable dans le fichier YAML (voir `config.example.yml`) :
+
+```yaml
+classlive:
+  security:
+    trainer_accounts:            # comptes formateurs additionnels (password min 8 caractères)
+      - { username: "prof2", password: "mot-de-passe-min-8-car" }
+  session:
+    max_students: 300            # 0 = illimité ; join au-delà -> 409 "Session pleine"
+    retention_days: 365          # purge auto des sessions terminées (0 = désactivé)
+  audit:
+    enabled: true                # journal d'audit en SQLite + fichier JSON-lines
+    file: null                   # défaut : <workdir>/audit.log
+  export:
+    max_zip_mb: 50               # taille max d'un export/import ZIP d'événement
+```
+
+## v0.8.5 — Exploitation, RGPD et temps réel
+
+- **Multi-comptes formateurs** : `security.trainer_accounts` ajoute des comptes en plus de `CLASSLIVE_TRAINER_PASSWORD`.
+- **Journal d'audit** : connexions (succès/échec), démarrages/arrêts de Live, expulsions, droit à l'oubli, imports ZIP, restaurations de slides et purges — en table SQLite (`GET /api/v1/audit`) et en fichier JSON-lines (`audit.file`).
+- **Droit à l'oubli (RGPD)** : `DELETE /groups/{g}/events/{e}/students-data?nom=&prenom=` supprime en cascade toutes les participations, réponses, questions et réactions de l'élève sur l'événement.
+- **Export/import ZIP** : `GET .../export.zip` / `POST /groups/{group}/import.zip` (corps brut `application/zip`, `manifest.json` + slides `Sxxx_*.md`, contrôle de taille et de nommage strict).
+- **Q&A en live** : l'élève pose des questions (`POST /student/questions`), le formateur liste/répond/bascule (`/live/{id}/questions...`) ; notifications WebSocket `question_asked` (moniteur), `question_answered` (élève), `question_updated` (moniteur).
+- **Réactions emoji** : `POST /student/reaction`, compteurs `GET /live/{id}/reactions`, diffusion WebSocket `reaction` à tous.
+- **Limite d'élèves** : `session.max_students` (409 au-delà), **rétention** : `session.retention_days` avec purge au démarrage et `POST /admin/purge`.
+- **Stats d'usage** : `GET /api/v1/stats/usage`.
+- **Duplication de groupe** : `POST /groups/{group}/duplicate`.
+- **Versions de slides** : chaque `PUT .../content` archive l'ancien contenu (50 versions max par slide), consultables et restaurables (`.../versions`, `.../versions/{vid}`, `.../versions/{vid}/restore`).
+- **Compteur en ligne** : `online` dans `GET /student/current` (WebSockets actifs).
 
 ## v0.8.0 — Correction à la demande, sans notation
 

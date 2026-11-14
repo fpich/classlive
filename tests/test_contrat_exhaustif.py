@@ -1,4 +1,4 @@
-"""Complément v0.8.4 : contrats de routes, sécurité, erreurs et persistance.
+"""Complément v0.8.5 : contrats de routes, sécurité, erreurs et persistance.
 
 Ces tests n'écrivent que dans tmp_path et n'ouvrent aucun port réseau.
 Le test de charge et le redémarrage d'un VRAI serveur sont dans test_reseau_multiclients.py.
@@ -16,7 +16,7 @@ from classlive.api import create_app
 from classlive.config import Settings
 
 
-# 51 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
+# 68 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
 # Chaque route dispose en plus d'un scénario fonctionnel dans les tests historiques,
 # dans les nouveaux tests de ce fichier, ou dans test_reseau_multiclients.py.
 PUBLIC_ROUTES = {
@@ -29,6 +29,9 @@ PUBLIC_ROUTES = {
     ('POST', '/api/v1/student/next'),
     ('POST', '/api/v1/student/previous'),
     ('GET', '/api/v1/student/results'),
+    ('POST', '/api/v1/student/questions'),
+    ('GET', '/api/v1/student/questions'),
+    ('POST', '/api/v1/student/reaction'),
     ('POST', '/api/v1/live/start'),
     ('POST', '/api/v1/live/{live_id}/next'),
     ('POST', '/api/v1/live/{live_id}/previous'),
@@ -56,6 +59,10 @@ PUBLIC_ROUTES = {
     ('POST', '/api/v1/events'),
     ('GET', '/api/v1/events'),
     ('POST', '/api/v1/groups/{group}/events/{event}/duplicate'),
+    ('POST', '/api/v1/groups/{group}/duplicate'),
+    ('DELETE', '/api/v1/groups/{group}/events/{event}/students-data'),
+    ('GET', '/api/v1/groups/{group}/events/{event}/export.zip'),
+    ('POST', '/api/v1/groups/{group}/import.zip'),
     ('PATCH', '/api/v1/groups/{group}'),
     ('DELETE', '/api/v1/groups/{group}'),
     ('PATCH', '/api/v1/groups/{group}/events/{title}'),
@@ -66,6 +73,16 @@ PUBLIC_ROUTES = {
     ('PATCH', '/api/v1/groups/{group}/events/{event}/slides/{slide}'),
     ('DELETE', '/api/v1/groups/{group}/events/{event}/slides/{slide}'),
     ('PUT', '/api/v1/groups/{group}/events/{event}/slides/{slide}/content'),
+    ('GET', '/api/v1/groups/{group}/events/{event}/slides/{slide}/versions'),
+    ('GET', '/api/v1/groups/{group}/events/{event}/slides/{slide}/versions/{vid}'),
+    ('POST', '/api/v1/groups/{group}/events/{event}/slides/{slide}/versions/{vid}/restore'),
+    ('GET', '/api/v1/stats/usage'),
+    ('POST', '/api/v1/admin/purge'),
+    ('GET', '/api/v1/audit'),
+    ('GET', '/api/v1/live/{live_id}/questions'),
+    ('POST', '/api/v1/live/{live_id}/questions/{qid}/answer'),
+    ('POST', '/api/v1/live/{live_id}/questions/{qid}/toggle'),
+    ('GET', '/api/v1/live/{live_id}/reactions'),
     ('POST', '/api/v1/player/select'),
     ('POST', '/api/v1/player/{session_id}/next'),
     ('POST', '/api/v1/player/{session_id}/previous'),
@@ -82,6 +99,8 @@ STUDENT_ENDPOINTS = {
     ('POST', '/api/v1/student/resume'), ('GET', '/api/v1/student/current'),
     ('POST', '/api/v1/student/answers'), ('POST', '/api/v1/student/next'),
     ('POST', '/api/v1/student/previous'), ('GET', '/api/v1/student/results'),
+    ('POST', '/api/v1/student/questions'), ('GET', '/api/v1/student/questions'),
+    ('POST', '/api/v1/student/reaction'),
 }
 
 
@@ -123,7 +142,7 @@ def test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant(client
     concrete = path.format(
         group=group, event=event, title=event, live_id=live['live_id'],
         slide=slides[0], session_id='session_inexistante',
-        participation_id=student['participation_id'])
+        participation_id=student['participation_id'], qid=1, vid=1)
     for header in ('', f'Bearer {student["student_session_id"]}'):
         r = client.request(method, concrete, headers={'Authorization': header})
         assert r.status_code == 401, (method, concrete, r.status_code, r.text)
