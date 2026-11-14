@@ -57,7 +57,7 @@ bash tests/run_suite_complete.sh
 
 Le script crée si besoin un environnement Python réservé aux tests (`.venv-tests`), lance les **tests pytest**, le **parcours complet curl sur un serveur éphémère**, puis **30 étudiants simultanés** sur de véritables WebSockets avec réponses concurrentes, redémarrage du service isolé pendant un Live, export CSV et réinitialisation. Aucun test de cette commande ne modifie le daemon installé sur `:8080`, le fichier `/etc/classlive/config.yml` ni le workspace de production.
 
-Le rapport local est `tests/rapports/derniere_execution.log` ; le détail du périmètre est dans [`tests/MATRICE_COUVERTURE.md`](tests/MATRICE_COUVERTURE.md). Chaque nouvel endpoint doit être ajouté à l'inventaire des 47 opérations OpenAPI dans `tests/test_contrat_exhaustif.py`. Les tests ne garantissent pas l'absence de tout défaut et ne remplacent pas une campagne d'exploitation longue durée.
+Le rapport local est `tests/rapports/derniere_execution.log` ; le détail du périmètre est dans [`tests/MATRICE_COUVERTURE.md`](tests/MATRICE_COUVERTURE.md). Chaque nouvel endpoint doit être ajouté à l'inventaire des 48 opérations OpenAPI dans `tests/test_contrat_exhaustif.py`. Les tests ne garantissent pas l'absence de tout défaut et ne remplacent pas une campagne d'exploitation longue durée.
 
 Pour exécuter seulement les tests Python : `pytest -q` (avec les dépendances de test).
 
@@ -160,6 +160,7 @@ Tous les exemples ci-dessous demandent `Authorization: Bearer JETON_FORMATEUR`.
 | `GET` | `/live/{live_id}/export.csv` | CSV de la session |
 | `GET` | `/groups/{group}/events/{event}/sessions` | Sessions actives et terminées |
 | `GET` | `/groups/{group}/events/{event}/export.csv` | CSV cumulé des sessions |
+| `GET` | `/groups/{group}/events/{event}/student-results?nom=&prenom=` | Toutes les réponses d'un élève sur toutes les sessions de l'événement |
 | `DELETE` | `/live/{live_id}` | Supprimer une session **terminée** et ses participations/réponses |
 | `DELETE` | `/groups/{group}/events/{event}/sessions` | Réinitialiser les sessions d'un événement, seulement si aucune n'est active |
 

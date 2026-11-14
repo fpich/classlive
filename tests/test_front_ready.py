@@ -353,3 +353,92 @@ def test_duplicate_copytree_oserror_direct(tmp_path, monkeypatch):
     monkeypatch.setattr(shutil, 'copytree', MagicMock(side_effect=OSError('disque plein')))
     with pytest.raises(StorageError, match="dupliquer"):
         storage.duplicate_event(g, e)
+
+
+# ── GET /events/{e}/student-results?nom=&prenom= ─────────────────────────────
+
+def _live_with_answers(client, group, title, reponses):
+    """Crée un événement avec 2 slides Q, démarre un Live, un élève répond, stop."""
+    g = client.post('/api/v1/groups', json={'group': group}).json()['group']
+    e = client.post('/api/v1/events', json={'group': g, 'title': title}).json()['title']
+    base = f'/api/v1/groups/{g}/events/{e}/slides'
+    client.post(base, json={'title': 'Q1', 'slide_type': 'Q', 'content': '# Q1'})
+    client.post(base, json={'title': 'Q2', 'slide_type': 'Q', 'content': '# Q2'})
+    live = client.post('/api/v1/live/start', json={'group': g, 'title': e}).json()
+    s = client.post('/api/v1/student/join', json={'session_code': live['session_code'], 'nom': 'Dupont', 'prenom': 'Marie'}).json()
+    h = {'Authorization': 'Bearer ' + s['student_session_id']}
+    client.post('/api/v1/student/answers', headers=h, json={'answer': {'selected': reponses[0]}})
+    client.post(f"/api/v1/live/{live['live_id']}/next")
+    client.post('/api/v1/student/answers', headers=h, json={'answer': {'selected': reponses[1]}})
+    client.post(f"/api/v1/live/{live['live_id']}/stop")
+    return g, e
+
+
+def test_student_results_deux_sessions(client):
+    g, e = _live_with_answers(client, 'G', 'Cours', [['A'], ['B']])
+    # Deuxième session sur le même événement
+    live2 = client.post('/api/v1/live/start', json={'group': g, 'title': e}).json()
+    s2 = client.post('/api/v1/student/join', json={'session_code': live2['session_code'], 'nom': 'Dupont', 'prenom': 'Marie'}).json()
+    h2 = {'Authorization': 'Bearer ' + s2['student_session_id']}
+    client.post('/api/v1/student/answers', headers=h2, json={'answer': {'selected': ['C']}})
+    client.post(f"/api/v1/live/{live2['live_id']}/stop")
+    r = client.get(f'/api/v1/groups/{g}/events/{e}/student-results', params={'nom': 'Dupont', 'prenom': 'Marie'})
+    assert r.status_code == 200
+    data = r.json()
+    assert data['nom'] == 'Dupont' and data['prenom'] == 'Marie'
+    assert data['group'] == g and data['event'] == e
+    assert len(data['sessions']) == 2
+    assert data['total_answers'] == 3
+    assert data['sessions'][0]['answers'][0]['answer'] == {'selected': ['A']}
+    assert data['sessions'][1]['answers'][0]['answer'] == {'selected': ['C']}
+    assert all(s['status'] == 'ended' for s in data['sessions'])
+
+
+def test_student_results_nom_inconnu(client):
+    g, e = _live_with_answers(client, 'G', 'Cours', [['A'], ['B']])
+    r = client.get(f'/api/v1/groups/{g}/events/{e}/student-results', params={'nom': 'Inconnu', 'prenom': 'X'})
+    assert r.status_code == 200
+    assert r.json()['sessions'] == [] and r.json()['total_answers'] == 0
+
+
+def test_student_results_sans_params_422(client):
+    g, e = _live_with_answers(client, 'G', 'Cours', [['A'], ['B']])
+    r = client.get(f'/api/v1/groups/{g}/events/{e}/student-results')
+    assert r.status_code == 422
+    r2 = client.get(f'/api/v1/groups/{g}/events/{e}/student-results', params={'nom': 'Dupont'})
+    assert r2.status_code == 422
+
+
+def test_student_results_sans_auth_401(client):
+    g, e = _live_with_answers(client, 'G', 'Cours', [['A'], ['B']])
+    r = client.get(f'/api/v1/groups/{g}/events/{e}/student-results',
+                   params={'nom': 'Dupont', 'prenom': 'Marie'}, headers={'Authorization': ''})
+    assert r.status_code == 401
+
+
+def test_student_results_event_inexistant_404(client):
+    g = client.post('/api/v1/groups', json={'group': 'G'}).json()['group']
+    r = client.get(f'/api/v1/groups/{g}/events/E999_X/student-results', params={'nom': 'A', 'prenom': 'B'})
+    assert r.status_code == 404
+
+
+def test_student_results_homonymes_meme_session(client):
+    g = client.post('/api/v1/groups', json={'group': 'G'}).json()['group']
+    e = client.post('/api/v1/events', json={'group': g, 'title': 'E'}).json()['title']
+    client.post(f'/api/v1/groups/{g}/events/{e}/slides', json={'title': 'Q', 'slide_type': 'Q', 'content': '# Q'})
+    live = client.post('/api/v1/live/start', json={'group': g, 'title': e}).json()
+    s1 = client.post('/api/v1/student/join', json={'session_code': live['session_code'], 'nom': 'Dupont', 'prenom': 'Marie'}).json()
+    s2 = client.post('/api/v1/student/join', json={'session_code': live['session_code'], 'nom': 'Dupont', 'prenom': 'Marie'}).json()
+    assert s1['participation_id'] != s2['participation_id']
+    h1 = {'Authorization': 'Bearer ' + s1['student_session_id']}
+    h2 = {'Authorization': 'Bearer ' + s2['student_session_id']}
+    client.post('/api/v1/student/answers', headers=h1, json={'answer': {'selected': ['A']}})
+    client.post('/api/v1/student/answers', headers=h2, json={'answer': {'selected': ['B']}})
+    client.post(f"/api/v1/live/{live['live_id']}/stop")
+    data = client.get(f'/api/v1/groups/{g}/events/{e}/student-results',
+                      params={'nom': 'Dupont', 'prenom': 'Marie'}).json()
+    assert len(data['sessions']) == 2  # deux participations homonymes
+    pids = {s['participation_id'] for s in data['sessions']}
+    assert pids == {s1['participation_id'], s2['participation_id']}
+    reponses = sorted(s['answers'][0]['answer']['selected'][0] for s in data['sessions'])
+    assert reponses == ['A', 'B']

@@ -228,6 +228,12 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return Response(store.event_csv(group,event),media_type='text/csv; charset=utf-8',
                         headers={'Content-Disposition':'attachment; filename="classlive_evenement.csv"'})
 
+    @trainer_routes.get('/groups/{group}/events/{event}/student-results',tags=['Résultats'])
+    def student_results(group: str, event: str, nom: str | None = None, prenom: str | None = None):
+        if not nom or not prenom:
+            raise HTTPException(status_code=422, detail='Paramètres nom et prenom obligatoires.')
+        return store.student_results(group, event, nom.strip(), prenom.strip())
+
     @trainer_routes.delete('/live/{live_id}',tags=['Résultats'])
     def delete_session(live_id: str):
         return store.delete(live_id)

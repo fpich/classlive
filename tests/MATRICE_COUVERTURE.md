@@ -2,7 +2,7 @@
 
 ## Objectif et périmètre
 
-Les **47 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
+Les **48 opérations HTTP documentées par OpenAPI** et les **2 routes WebSocket** sont inventoriées. La suite couvre leur parcours nominal, les contrôles d'accès et les cas d'erreur pertinents, ainsi que le démarrage d'un **vrai serveur temporaire** sous le moteur Uvicorn.
 
 Le test d'inventaire `test_inventaire_openapi_et_websockets` échoue si une route apparaît/disparaît sans être ajoutée à la matrice des tests. Le test `test_toutes_routes_formateur_refusent_absence_jeton_et_jeton_etudiant` essaie systématiquement chaque route protégée en étant anonyme et étudiant. La suite n'utilise **ni le port 8080, ni `/etc/classlive`, ni le workspace réel**.
 
@@ -59,7 +59,7 @@ Ce mode exige `pytest`, `httpx`, FastAPI, PyYAML, Uvicorn et `websockets` déjà
 
 - Authentification et étudiants : `POST /auth/login`, `POST /student/join`, `POST /student/resume`, `GET /student/current`, `POST /student/answers`.
 - Formateur Live : `POST /live/start`, `POST /live/{id}/next`, `previous`, `goto`, `correction/show`, `correction/hide`, `stop` ; `GET /live/active`, `GET /live/{id}/status`, `students`, `results`, `stats` (`?all=1`), `export.csv` ; `DELETE /live/{id}`, `DELETE /live/{id}/students/{pid}`.
-- Événements : `GET /events` (liste globale), `POST /groups/{g}/events/{e}/duplicate`.
+- Événements : `GET /events` (liste globale), `POST /groups/{g}/events/{e}/duplicate`, `GET /groups/{g}/events/{e}/student-results?nom=&prenom=` (réponses d'un élève sur toutes les sessions).
 - Auth : `POST /auth/change-password` (rate limité, invalide les jetons).
 - CORS : origines via `security.cors_origins`.
 - Sessions d'événement : `GET /groups/{group}/events/{event}/sessions`, `export.csv` ; `DELETE /groups/{group}/events/{event}/sessions`.

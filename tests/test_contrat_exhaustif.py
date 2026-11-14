@@ -16,7 +16,7 @@ from classlive.api import create_app
 from classlive.config import Settings
 
 
-# 47 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
+# 48 combinaisons HTTP publiques, contractuellement attendues dans OpenAPI.
 # Chaque route dispose en plus d'un scénario fonctionnel dans les tests historiques,
 # dans les nouveaux tests de ce fichier, ou dans test_reseau_multiclients.py.
 PUBLIC_ROUTES = {
@@ -43,6 +43,7 @@ PUBLIC_ROUTES = {
     ('GET', '/api/v1/groups/{group}/events/{event}/sessions'),
     ('DELETE', '/api/v1/groups/{group}/events/{event}/sessions'),
     ('GET', '/api/v1/groups/{group}/events/{event}/export.csv'),
+    ('GET', '/api/v1/groups/{group}/events/{event}/student-results'),
     ('DELETE', '/api/v1/live/{live_id}'),
     ('GET', '/api/v1/help'),
     ('GET', '/health'),

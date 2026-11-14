@@ -354,6 +354,35 @@ class LiveStore:
             result['options'] = s['options']
         return result
 
+    def student_results(self, group, event, nom, prenom):
+        """Toutes les réponses d'un élève (nom+prénom) sur toutes les sessions d'un événement."""
+        g, parent = self.slides._parent(group, event)
+        with self.db() as con:
+            sessions = con.execute(
+                'SELECT id,started_at,ended_at,status FROM live_sessions WHERE group_name=? AND event_name=? ORDER BY started_at',
+                (g.name, parent.name)).fetchall()
+            result_sessions = []
+            total = 0
+            for sess in sessions:
+                parts = con.execute('SELECT id FROM participations WHERE live_id=? AND nom=? AND prenom=?',
+                                    (sess['id'], nom, prenom)).fetchall()
+                for p in parts:
+                    rows = con.execute(
+                        "SELECT s.slide_number,s.answer_json,s.submitted_at,snap.filename FROM submissions s "
+                        "JOIN snapshots snap ON snap.live_id=? AND snap.number=s.slide_number "
+                        "WHERE s.participation_id=? ORDER BY s.id", (sess['id'], p['id'])).fetchall()
+                    latest = {}
+                    for row in rows:
+                        latest[row['slide_number']] = row
+                    answers = [{'slide': r['filename'], 'answer': json.loads(r['answer_json']),
+                                'submitted_at': r['submitted_at']} for r in latest.values()]
+                    total += len(answers)
+                    result_sessions.append({'live_id': sess['id'], 'started_at': sess['started_at'],
+                                            'status': sess['status'], 'participation_id': p['id'],
+                                            'answers': answers})
+        return {'group': g.name, 'event': parent.name, 'nom': nom, 'prenom': prenom,
+                'sessions': result_sessions, 'total_answers': total}
+
     def active(self):
         """Tous les Lives en cours (un par événement au plus)."""
         with self.db() as con:
