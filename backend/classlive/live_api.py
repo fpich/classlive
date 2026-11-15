@@ -245,7 +245,12 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
                                  start_at=payload.start_at, anonymous=payload.anonymous)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        result['join_url'] = ('/app/join?code=' if cfg.frontend_dir else '/join?code=') + result['session_code']
+        # join_url absolu si public_url configuré (expose.conf), sinon relatif.
+        if cfg.public_url:
+            base_path = '/app' if cfg.frontend_dir else ''
+            result['join_url'] = f"{cfg.public_url}{base_path}/join?code={result['session_code']}"
+        else:
+            result['join_url'] = ('/app/join?code=' if cfg.frontend_dir else '/join?code=') + result['session_code']
         if result['status'] == 'scheduled':
             arm_scheduled(store, result['live_id'], result['started_at'])
         store.audit(cfg.trainer_username, 'live_start',

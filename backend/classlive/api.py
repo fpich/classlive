@@ -172,6 +172,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             db_ok = False
         return {"status": "ok" if db_ok else "degraded", "service": "classlive", "version": __version__, "database": db_ok}
 
+    @app.get("/api/v1/public-url", tags=["Système"])
+    def public_url():
+        """URL d'exposition LAN configurée (expose.conf), pour le QR code côté frontend."""
+        return {"public_url": cfg.public_url}
+
     router = APIRouter(dependencies=[Depends(auth.trainer)])
 
     @router.post("/groups", response_model=GroupResult, tags=["Groupes"], status_code=200)

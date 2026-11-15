@@ -15,6 +15,7 @@ class Settings:
     events_dir: str = "Evts"
     host: str = "0.0.0.0"
     port: int = 8080
+    public_url: str | None = None  # URL d'exposition LAN (ex: http://192.168.10.26:8080), lu depuis expose.conf
     log_level: str = "INFO"
     api_key: str | None = None
     trainer_username: str = "formateur"
@@ -134,8 +135,26 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         accounts.append((acc['username'], acc['password']))
 
     audit_path = Path(audit_file).expanduser() if audit_file else (workdir / 'audit.log')
+
+    # URL d'exposition LAN lue depuis expose.conf (à côté du dépôt ou dans le workdir).
+    public_url = server.get('public_url')
+    if not public_url:
+        for conf in (Path(__file__).resolve().parents[2] / 'expose.conf', workdir / 'expose.conf'):
+            if conf.is_file():
+                line = conf.read_text(encoding='utf-8').strip().splitlines()
+                for l in line:
+                    l = l.strip()
+                    if l and not l.startswith('#'):
+                        public_url = l.rstrip('/')
+                        break
+                if public_url:
+                    break
+    if public_url is not None and (not isinstance(public_url, str) or not public_url.startswith(('http://', 'https://'))):
+        raise ValueError("public_url doit commencer par http:// ou https:// (ex: http://192.168.10.26:8080)")
+
     return Settings(trainer_username=trainer_username, trainer_password=trainer_password,
                     trainer_accounts=tuple(accounts), workdir=workdir, events_dir=events_dir, host=host, port=port,
+                    public_url=public_url,
                     log_level=level.upper(), api_key=api_key, cors_origins=tuple(cors_origins),
                     max_students=max_students, retention_days=retention_days, join_rate_limit=join_rate_limit,
                     audit_enabled=audit_enabled,

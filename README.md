@@ -5,7 +5,7 @@ Plateforme de **sondage et d'exercices en direct** pour la classe, proche de Woo
 Le dépôt est organisé en deux parties :
 
 - [`backend/`](backend/) — API REST + WebSockets (FastAPI, Python ≥ 3.11), stockage Markdown et SQLite. **C'est le cœur du produit, actuellement complet et validé.**
-- [`frontend/`](frontend/) — interface web (Vite/React), **pas encore implémentée** (dossier vide, prêt à recevoir le build).
+- [`frontend/`](frontend/) — interface web (Vite/React/TypeScript/Tailwind), servie par le backend sur `/app` en production.
 
 ## Fonctionnalités
 
@@ -16,19 +16,47 @@ Le dépôt est organisé en deux parties :
 - **Exploitation** : multi-comptes formateurs, journal d'audit, droit à l'oubli (RGPD), rétention/purge, rate limiting, anti zip-bomb, SQL paramétré.
 - **Qualité** : 424 tests à **100 % de couverture**, CI GitHub Actions, suite complète (curl + 30 étudiants en WebSockets réels + soak + charge 100 étudiants).
 
-## Démarrage rapide (développement)
+## Démarrage rapide
 
 ```bash
-cd backend
+export CLASSLIVE_TRAINER_PASSWORD='mon-mot-de-passe-local-fort'
+./start.sh
+```
+
+Ce script **build le frontend** (`frontend/dist/`), configure `frontend_dir` dans `backend/config.yml`, puis lance le **backend** FastAPI sur `0.0.0.0:8080` qui sert l'application sur `/app`. Un seul port. Ctrl+C pour arrêter.
+
+### Accès depuis le réseau LAN
+
+Au démarrage, `start.sh` affiche l'IP LAN détectée, par exemple :
+
+```
+═══════════════════════════════════════════
+  ClassLive — http://192.168.10.26:8080/app/
+  Formateur : http://192.168.10.26:8080/app/
+  Élèves    : http://192.168.10.26:8080/app/join?code=XXXXXX
+  API/Swagger : http://192.168.10.26:8080/docs
+═══════════════════════════════════════════
+```
+
+- **Formateur** : ouvrir `http://<IP_LAN>:8080/app/` → le QR code affiché dans le pilotage pointe automatiquement sur l'IP réseau.
+- **Élèves** : scanner le QR code ou ouvrir `http://<IP_LAN>:8080/app/join?code=XXXXXX` sur leur téléphone.
+- **Pare-feu** : un seul port à ouvrir sur le LAN, le **8080**.
+
+Lancement manuel (sans start.sh) :
+
+```bash
+cd frontend && npm install && npm run build
+cd ../backend
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e '.[test]'
 cp config.local.example.yml config.yml
+# éditer config.yml : frontend_dir: "<racine>/frontend/dist"
 export CLASSLIVE_TRAINER_PASSWORD='mon-mot-de-passe-local-fort'
 python -m classlive
 ```
 
-Le service écoute alors sur `http://localhost:8080` :
+Le service écoute alors sur `http://0.0.0.0:8080` :
 
 - `GET /health` — état du service
 - `GET /docs` — documentation OpenAPI / Swagger
