@@ -4,12 +4,19 @@
 Chaque étudiant joue un rôle réaliste : arrivées décalées, réponses bonnes /
 mauvaises / partielles / absentes, questions posées, réactions emoji,
 déconnexions en cours de séance. Le formateur navigue, diffuse la correction,
-fait une annonce et consulte résultats, stats et exports.
+fait une annonce, consulte résultats, stats et exports.
 
-Le fichier couvre aussi, sur la même instance éphémère, les cas limites
-demandés : arrivées tardives, reconnexion par jeton, verrouillage (compte à
-rebours + correction), planification (start_at), mode anonyme, exports par
-étudiant et vérification du contenu des CSV.
+Six scénarios indépendants, tous sur la même instance éphémère :
+  [1] cours complet 11 slides / 40 étudiants (arrivées tardives, reconnexion
+      par jeton, correction, annonce, kick, stats toutes slides, exports CSV
+      vérifiés ligne à ligne, résultats par étudiant) ;
+  [2] verrouillage par compte à rebours (réponse refusée après la deadline) ;
+  [3] planification : live planifié puis activé automatiquement par le timer ;
+  [4] mode anonyme : identités masquées dans results ET dans tous les CSV ;
+  [5] mode autonome : progression perso, verrouillage après réponse, correction
+      après_question / jamais / à_la_fin, récapitulatif élève ;
+  [6] agrégation multi-sessions : student-results et export événement sur
+      plusieurs lives du même événement.
 
 Ne touche jamais au ClassLive de production : instance éphémère sur un port
 libre, workspace SQLite temporaire, tout est détruit à la fin.
@@ -19,7 +26,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import random
 import sys
 import tempfile
 import time
@@ -30,8 +36,6 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_reseau_multiclients import Server, PASSWORD, req, auth
-
-random.seed(20261115)  # reproductible
 
 # ── Profils des 40 étudiants ────────────────────────────────────────────────
 PRENOMS = ["Marie", "Jean", "Léa", "Paul", "Emma", "Hugo", "Chloé", "Louis",
@@ -67,19 +71,71 @@ ORDER = ['Introduction', 'QCM couches', 'Sondage expérience',
          'Associer', 'Ordonner', 'Classifier', 'Texte à trous']
 KINDS = ['C', 'Q', 'P', 'F', 'N', 'L', 'I', 'A', 'O', 'R', 'T']
 
+QCM_CONTENT = ('---\nclasslive_answer:\n  selected: [B]\n---\n'
+               '# Question ?\n- A\n- B')
 
-def build_course(client, trainer, group='BTS SIO - Réseaux', event='Cours TCP IP'):
-    """Le formateur prépare un cours réaliste de 11 slides."""
+
+# ── Helpers mutualisés (création / démarrage / arrêt) ───────────────────────
+
+def make_group_event(client, trainer, group, event):
     g = req(client, 'POST', '/api/v1/groups', token=trainer,
             json={'group': group}).json()['group']
     e = req(client, 'POST', '/api/v1/events', token=trainer,
             json={'group': g, 'title': event}).json()['title']
+    return g, e
+
+
+def add_slide(client, trainer, base, title, kind, content):
+    r = req(client, 'POST', base, token=trainer,
+            json={'title': title, 'slide_type': kind, 'content': content})
+    return r.json()['slide']
+
+
+def make_live(client, trainer, group, event, slides, **live_kwargs):
+    """Crée groupe + événement + slides, démarre le live.
+    slides = [(title, kind, content), ...]. Renvoie le contexte complet."""
+    g, e = make_group_event(client, trainer, group, event)
+    base = f'/api/v1/groups/{g}/events/{e}/slides'
+    for title, kind, content in slides:
+        add_slide(client, trainer, base, title, kind, content)
+    live = req(client, 'POST', '/api/v1/live/start', token=trainer,
+               json={'group': g, 'title': e, **live_kwargs}).json()
+    return {'g': g, 'e': e, 'base': base, **live}
+
+
+def teardown_live(client, trainer, ctx):
+    """Arrête le live, le supprime, puis supprime événement et groupe."""
+    req(client, 'POST', f"/api/v1/live/{ctx['live_id']}/stop", token=trainer)
+    req(client, 'DELETE', f"/api/v1/live/{ctx['live_id']}", token=trainer)
+    req(client, 'DELETE', f"/api/v1/groups/{ctx['g']}/events/{ctx['e']}/sessions", token=trainer)
+    req(client, 'DELETE', f"/api/v1/groups/{ctx['g']}/events/{ctx['e']}", token=trainer)
+    req(client, 'DELETE', f"/api/v1/groups/{ctx['g']}", token=trainer)
+
+
+def join_student(client, code, nom, prenom):
+    r = client.post('/api/v1/student/join', json={
+        'session_code': code, 'nom': nom, 'prenom': prenom})
+    assert r.status_code == 200, r.text
+    return r.json()['student_session_id'], r.json()['participation_id']
+
+
+def student_headers(token):
+    return {'Authorization': 'Bearer ' + token}
+
+
+def read_csv(resp):
+    assert resp.status_code == 200, resp.text
+    return list(csv.DictReader(io.StringIO(resp.content.decode('utf-8-sig')),
+                               delimiter=';'))
+
+
+def build_course(client, trainer, group='BTS SIO - Réseaux', event='Cours TCP IP'):
+    """Le formateur prépare un cours réaliste de 11 slides."""
+    g, e = make_group_event(client, trainer, group, event)
     base = f'/api/v1/groups/{g}/events/{e}/slides'
     slides = {}
     def add(title, kind, content):
-        r = req(client, 'POST', base, token=trainer,
-                json={'title': title, 'slide_type': kind, 'content': content})
-        slides[title] = r.json()['slide']
+        slides[title] = add_slide(client, trainer, base, title, kind, content)
     add('Introduction', 'C', '# Bienvenue\n\nAujourd\'hui : les fondamentaux TCP/IP.')
     add('QCM couches', 'Q',
         '---\nclasslive_answer:\n  selected: [B]\n---\n# Quelle couche gère le routage ?\n- A: Liaison\n- B: Réseau\n- C: Transport')
@@ -124,31 +180,9 @@ def answer_for(kind, i):
     return {'selected': ['B']}
 
 
-def join_student(client, code, nom, prenom):
-    r = client.post('/api/v1/student/join', json={
-        'session_code': code, 'nom': nom, 'prenom': prenom})
-    assert r.status_code == 200, r.text
-    return r.json()['student_session_id'], r.json()['participation_id']
-
-
-def add_simple_qcm(client, trainer, base, title='QCM simple'):
-    """Ajoute un QCM à réponse B, renvoie le nom de la slide."""
-    req(client, 'POST', base, token=trainer,
-        json={'title': title, 'slide_type': 'Q',
-              'content': '---\nclasslive_answer:\n  selected: [B]\n---\n# Question ?\n- A\n- B'})
-    return title
-
-
-def cleanup(client, trainer, g, e):
-    """Supprime événement et groupe (les sessions sont déjà arrêtées)."""
-    req(client, 'DELETE', f'/api/v1/groups/{g}/events/{e}/sessions', token=trainer)
-    req(client, 'DELETE', f'/api/v1/groups/{g}/events/{e}', token=trainer)
-    req(client, 'DELETE', f'/api/v1/groups/{g}', token=trainer)
-
+# ── [1] Cours complet : 11 slides, 40 étudiants ─────────────────────────────
 
 def scenario_cours_40(client, trainer):
-    """Le scénario principal : 11 slides, 40 étudiants, correction, annonce,
-    reconnexion, exports et attribution."""
     g, e, base, slides = build_course(client, trainer)
     live = req(client, 'POST', '/api/v1/live/start', token=trainer,
                json={'group': g, 'title': e}).json()
@@ -181,7 +215,7 @@ def scenario_cours_40(client, trainer):
             b = BEHAVIOUR[kind][i]
             if b == 0:
                 continue  # absent
-            h = {'Authorization': 'Bearer ' + tokens[i]}
+            h = student_headers(tokens[i])
             r = client.post('/api/v1/student/answers', headers=h,
                             json={'answer': answer_for(kind, i)})
             assert r.status_code == 200, (kind, i, r.text)
@@ -195,14 +229,14 @@ def scenario_cours_40(client, trainer):
             for i in range(0, 40, 13):
                 if i in joined:
                     client.post('/api/v1/student/questions',
-                                headers={'Authorization': 'Bearer ' + tokens[i]},
+                                headers=student_headers(tokens[i]),
                                 json={'text': f'Question de {PRENOMS[i]} sur {title} ?'})
         # Réactions emoji éparses
         if idx in (2, 5):
             for i in range(0, 40, 5):
                 if i in joined:
                     client.post('/api/v1/student/reaction',
-                                headers={'Authorization': 'Bearer ' + tokens[i]},
+                                headers=student_headers(tokens[i]),
                                 json={'emoji': '👍' if i % 2 else '🤔'})
         # Arrivées tardives : 4 étudiants rejoignent après le QCM (idx 1)
         if idx == 1:
@@ -231,7 +265,7 @@ def scenario_cours_40(client, trainer):
     assert cur['correction_visible'] is True and cur.get('correction') == {'selected': ['B']}, cur
     # Réponse refusée pendant l'affichage de la correction
     blocked = client.post('/api/v1/student/answers',
-                          headers={'Authorization': 'Bearer ' + tokens[0]},
+                          headers=student_headers(tokens[0]),
                           json={'answer': {'selected': ['A']}})
     assert blocked.status_code == 409, blocked.text
     req(client, 'POST', f'/api/v1/live/{lid}/correction/hide', token=trainer)
@@ -261,9 +295,19 @@ def scenario_cours_40(client, trainer):
         assert r['answered'] == answered[i], (i, r['answered'], answered[i])
     print('[1] Résultats : 40 étudiants, réponses cohérentes, sans notation.')
 
-    # Stats agrégées
+    # Stats agrégées : slide courante ET toutes les slides
     stats = req(client, 'GET', f'/api/v1/live/{lid}/stats', token=trainer).json()
     print('[1] Stats agrégées OK :', json.dumps(stats)[:200])
+    all_stats = req(client, 'GET', f'/api/v1/live/{lid}/stats', token=trainer,
+                    params={'all': 'true'}).json()
+    assert len(all_stats['slides']) == 11, len(all_stats['slides'])
+    # stats compte les lignes brutes (les réponses modifiées comptent double)
+    raw_expected = sum(answered.values()) + sum(
+        1 for kind in KINDS if kind != 'C'
+        for i in range(40) if i in joined and BEHAVIOUR[kind][i] == 2)
+    assert sum(s['answered'] for s in all_stats['slides']) == raw_expected, all_stats
+    assert all(s['answered'] <= 40 for s in all_stats['slides']), all_stats
+    print(f"[1] Stats toutes slides : 11 slides, {raw_expected} réponses brutes au total.")
 
     # Questions posées par les étudiants
     qs = req(client, 'GET', f'/api/v1/live/{lid}/questions', token=trainer).json()
@@ -281,11 +325,8 @@ def scenario_cours_40(client, trainer):
     print(f'[1] Réactions : {reac["total"]} au total, {reac["counts"]}')
 
     # ── Exports CSV : contenu vérifié, pas seulement le nombre de lignes ──
-    csv_resp = client.get(f'/api/v1/live/{lid}/export.csv',
-                          headers={'Authorization': 'Bearer ' + trainer})
-    assert csv_resp.status_code == 200
-    rows = list(csv.DictReader(io.StringIO(csv_resp.content.decode('utf-8-sig')),
-                               delimiter=';'))
+    rows = read_csv(client.get(f'/api/v1/live/{lid}/export.csv',
+                               headers=student_headers(trainer)))
     assert set(rows[0]) == {'live_id', 'nom', 'prenom', 'date_session', 'slide',
                             'reponse_json', 'date_reponse'}, rows[0]
     assert 'points' not in rows[0], 'Notation dans le CSV'
@@ -307,10 +348,7 @@ def scenario_cours_40(client, trainer):
         ('réactions', f'/api/v1/live/{lid}/reactions.csv',
          {'live_id', 'emoji', 'nombre'}),
     ]:
-        r = client.get(path, headers={'Authorization': 'Bearer ' + trainer})
-        assert r.status_code == 200, (name, r.status_code)
-        rrows = list(csv.DictReader(io.StringIO(r.content.decode('utf-8-sig')),
-                                    delimiter=';'))
+        rrows = read_csv(client.get(path, headers=student_headers(trainer)))
         assert set(rrows[0]) == cols, (name, rrows[0])
         print(f'[1] Export {name} : {len(rrows)} lignes, colonnes vérifiées.')
 
@@ -322,27 +360,31 @@ def scenario_cours_40(client, trainer):
     print(f'[1] Résultats par étudiant ({NOMS[0]} {PRENOMS[0]}) : '
           f'{sr["total_answers"]} réponses.')
 
+    # ── Kick : le formateur retire un participant en cours de séance ──
+    kicked_pid = pids[39]
+    req(client, 'DELETE', f'/api/v1/live/{lid}/students/{kicked_pid}', token=trainer)
+    students = req(client, 'GET', f'/api/v1/live/{lid}/students', token=trainer).json()
+    assert students['total_students'] == 39, students
+    results = req(client, 'GET', f'/api/v1/live/{lid}/results', token=trainer).json()
+    assert len(results['results']) == 39
+    assert all(r['nom'] != NOMS[39] for r in results['results']), 'Étudiant expulsé encore présent'
+    print('[1] Kick : participant retiré, ses réponses supprimées (39 restants).')
+
     # ── Fin de séance : arrêt, archive, nettoyage ──
-    req(client, 'POST', f'/api/v1/live/{lid}/stop', token=trainer)
-    req(client, 'DELETE', f'/api/v1/live/{lid}', token=trainer)
-    cleanup(client, trainer, g, e)
+    teardown_live(client, trainer, {'g': g, 'e': e, 'live_id': lid})
     print('[1] Séance terminée et données de test nettoyées.')
 
 
+# ── [2] Verrouillage par compte à rebours ───────────────────────────────────
+
 def scenario_verrouillage(client, trainer):
     """Compte à rebours par question : réponse refusée après la deadline."""
-    g = req(client, 'POST', '/api/v1/groups', token=trainer,
-            json={'group': 'Verrouillage'}).json()['group']
-    e = req(client, 'POST', '/api/v1/events', token=trainer,
-            json={'group': g, 'title': 'Timing'}).json()['title']
-    base = f'/api/v1/groups/{g}/events/{e}/slides'
-    add_simple_qcm(client, trainer, base)
-    live = req(client, 'POST', '/api/v1/live/start', token=trainer,
-               json={'group': g, 'title': e, 'timing': 'par_question',
-                     'timing_seconds': 1}).json()
-    lid, code = live['live_id'], live['session_code']
+    ctx = make_live(client, trainer, 'Verrouillage', 'Timing',
+                    slides=[('QCM simple', 'Q', QCM_CONTENT)],
+                    timing='par_question', timing_seconds=1)
+    lid, code = ctx['live_id'], ctx['session_code']
     tok, _ = join_student(client, code, 'Durand', 'Marie')
-    h = {'Authorization': 'Bearer ' + tok}
+    h = student_headers(tok)
     # Réponse immédiate acceptée
     assert client.post('/api/v1/student/answers', headers=h,
                        json={'answer': {'selected': ['B']}}).status_code == 200
@@ -352,58 +394,206 @@ def scenario_verrouillage(client, trainer):
                        json={'answer': {'selected': ['A']}})
     assert late.status_code == 409, late.text
     print('[2] Verrouillage par compte à rebours : réponse refusée après la deadline.')
-    req(client, 'POST', f'/api/v1/live/{lid}/stop', token=trainer)
-    req(client, 'DELETE', f'/api/v1/live/{lid}', token=trainer)
-    cleanup(client, trainer, g, e)
+    teardown_live(client, trainer, ctx)
 
+
+# ── [3] Planification + activation automatique ──────────────────────────────
 
 def scenario_planification(client, trainer):
-    """Live planifié (start_at futur) : statut scheduled, puis arrêt."""
-    g = req(client, 'POST', '/api/v1/groups', token=trainer,
-            json={'group': 'Planification'}).json()['group']
-    e = req(client, 'POST', '/api/v1/events', token=trainer,
-            json={'group': g, 'title': 'Prévu'}).json()['title']
-    base = f'/api/v1/groups/{g}/events/{e}/slides'
-    add_simple_qcm(client, trainer, base)
-    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    live = req(client, 'POST', '/api/v1/live/start', token=trainer,
-               json={'group': g, 'title': e, 'start_at': future}).json()
-    assert live['status'] == 'scheduled', live
+    """Live planifié (start_at proche) : statut scheduled, listed, puis activé
+    automatiquement par le timer ; un étudiant peut alors rejoindre et répondre."""
+    ctx = make_live(client, trainer, 'Planification', 'Prévu',
+                    slides=[('QCM simple', 'Q', QCM_CONTENT)],
+                    start_at=(datetime.now(timezone.utc) + timedelta(seconds=2)).isoformat())
+    lid, code = ctx['live_id'], ctx['session_code']
+    assert ctx['status'] == 'scheduled', ctx
     sched = req(client, 'GET', '/api/v1/live/scheduled', token=trainer).json()
-    assert any(s['id'] == live['live_id'] for s in sched['scheduled']), sched
-    print('[3] Live planifié : statut scheduled et visible dans /live/scheduled.')
-    req(client, 'POST', f"/api/v1/live/{live['live_id']}/stop", token=trainer)
-    req(client, 'DELETE', f"/api/v1/live/{live['live_id']}", token=trainer)
-    cleanup(client, trainer, g, e)
+    assert any(s['id'] == lid for s in sched['scheduled']), sched
+    st = req(client, 'GET', f'/api/v1/live/{lid}/status', token=trainer).json()
+    assert st['status'] == 'scheduled', st
+    # Attente de l'activation automatique (timer armé au démarrage)
+    deadline_poll = time.time() + 10
+    while time.time() < deadline_poll:
+        st = req(client, 'GET', f'/api/v1/live/{lid}/status', token=trainer).json()
+        if st['status'] == 'running':
+            break
+        time.sleep(0.25)
+    assert st['status'] == 'running', st
+    sched = req(client, 'GET', '/api/v1/live/scheduled', token=trainer).json()
+    assert all(s['id'] != lid for s in sched['scheduled']), sched
+    # Une fois activé, un étudiant rejoint et répond
+    tok, _ = join_student(client, code, 'Leroy', 'Emma')
+    r = client.post('/api/v1/student/answers', headers=student_headers(tok),
+                    json={'answer': {'selected': ['B']}})
+    assert r.status_code == 200, r.text
+    print('[3] Live planifié : scheduled, activé automatiquement par le timer, utilisable.')
+    teardown_live(client, trainer, ctx)
 
+
+# ── [4] Mode anonyme ────────────────────────────────────────────────────────
 
 def scenario_anonyme(client, trainer):
-    """Mode anonyme : identités masquées dans results, mais student-results
-    par nom fonctionne toujours."""
-    g = req(client, 'POST', '/api/v1/groups', token=trainer,
-            json={'group': 'Anonymat'}).json()['group']
-    e = req(client, 'POST', '/api/v1/events', token=trainer,
-            json={'group': g, 'title': 'Anonyme'}).json()['title']
-    base = f'/api/v1/groups/{g}/events/{e}/slides'
-    add_simple_qcm(client, trainer, base)
-    live = req(client, 'POST', '/api/v1/live/start', token=trainer,
-               json={'group': g, 'title': e, 'anonymous': True}).json()
-    lid, code = live['live_id'], live['session_code']
-    assert live['anonymous'] is True
+    """Mode anonyme : identités masquées dans results ET dans tous les exports
+    CSV, mais student-results par nom réel fonctionne toujours."""
+    ctx = make_live(client, trainer, 'Anonymat', 'Anonyme',
+                    slides=[('QCM simple', 'Q', QCM_CONTENT)],
+                    anonymous=True)
+    lid, code = ctx['live_id'], ctx['session_code']
+    assert ctx['anonymous'] is True
     tok, _ = join_student(client, code, 'Dupont', 'Marie')
-    client.post('/api/v1/student/answers',
-                headers={'Authorization': 'Bearer ' + tok},
+    h = student_headers(tok)
+    client.post('/api/v1/student/answers', headers=h,
                 json={'answer': {'selected': ['B']}})
+    client.post('/api/v1/student/questions', headers=h,
+                json={'text': 'Question anonyme ?'})
     res = req(client, 'GET', f'/api/v1/live/{lid}/results', token=trainer).json()
     assert res['anonymous'] is True and res['results'][0]['nom'] == 'anonyme', res
+    # Tous les exports CSV masquent les identités
+    hdr = student_headers(trainer)
+    rows = read_csv(client.get(f'/api/v1/live/{lid}/export.csv', headers=hdr))
+    assert rows[0]['nom'] == 'anonyme' and rows[0]['prenom'] == '', rows[0]
+    prows = read_csv(client.get(f'/api/v1/live/{lid}/presence.csv', headers=hdr))
+    assert prows[0]['nom'] == 'anonyme' and prows[0]['prenom'] == '', prows[0]
+    qrows = read_csv(client.get(f'/api/v1/live/{lid}/questions.csv', headers=hdr))
+    assert qrows[0]['nom'] == 'anonyme' and qrows[0]['question'] == 'Question anonyme ?', qrows[0]
     # L'identité reste traçable par nom/prénom pour le formateur
-    sr = req(client, 'GET', f'/api/v1/groups/{g}/events/{e}/student-results',
+    sr = req(client, 'GET', f'/api/v1/groups/{ctx["g"]}/events/{ctx["e"]}/student-results',
              token=trainer, params={'nom': 'Dupont', 'prenom': 'Marie'}).json()
     assert sr['total_answers'] == 1, sr
-    print('[4] Mode anonyme : identités masquées, traçabilité par nom conservée.')
-    req(client, 'POST', f'/api/v1/live/{lid}/stop', token=trainer)
-    req(client, 'DELETE', f'/api/v1/live/{lid}', token=trainer)
-    cleanup(client, trainer, g, e)
+    print('[4] Mode anonyme : results + tous les CSV masqués, traçabilité par nom conservée.')
+    teardown_live(client, trainer, ctx)
+
+
+# ── [5] Mode autonome ───────────────────────────────────────────────────────
+
+def scenario_autonome(client, trainer):
+    """Mode autonome : progression perso, next bloqué tant que l'exercice n'est
+    pas répondu, verrouillage après réponse, correction selon correction_mode,
+    récapitulatif élève disponible seulement en fin de parcours."""
+    slides = [
+        ('QCM auto', 'Q', QCM_CONTENT),
+        ('Texte libre auto', 'F', '# Votre définition de TCP.'),
+        ('Conclusion', 'C', '# Fin du parcours autonome.'),
+    ]
+    ctx = make_live(client, trainer, 'Autonome', 'Parcours perso',
+                    slides=slides, mode='autonome', correction='après_question')
+    lid, code = ctx['live_id'], ctx['session_code']
+    tok, _ = join_student(client, code, 'Moreau', 'Chloé')
+    h = student_headers(tok)
+
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert cur['mode'] == 'autonome' and cur['number'] == 1 and cur['locked'] is False \
+        and cur['finished'] is False, cur
+    # next bloqué sur un exercice non répondu
+    blocked = client.post('/api/v1/student/next', headers=h)
+    assert blocked.status_code == 409, blocked.text
+    # réponse -> verrouillée, correction visible (après_question)
+    r = client.post('/api/v1/student/answers', headers=h,
+                    json={'answer': {'selected': ['B']}})
+    assert r.status_code == 200 and r.json()['locked'] is True, r.text
+    again = client.post('/api/v1/student/answers', headers=h,
+                        json={'answer': {'selected': ['A']}})
+    assert again.status_code == 409, again.text  # déjà verrouillée
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert cur['locked'] is True and cur['correction'] == {'selected': ['B']}, cur
+    # next débloqué, slide suivante
+    cur = req(client, 'POST', '/api/v1/student/next', token=tok).json()
+    assert cur['number'] == 2, cur
+    # récap perso indisponible tant que le parcours n'est pas fini
+    own = client.get('/api/v1/student/results', headers=h)
+    assert own.status_code == 409, own.text
+    # slide F répondue, puis slide C, puis next sur la dernière -> terminé
+    assert client.post('/api/v1/student/answers', headers=h,
+                       json={'answer': {'text': 'TCP garantit la livraison ordonnée.'}}).status_code == 200
+    cur = req(client, 'POST', '/api/v1/student/next', token=tok).json()
+    assert cur['number'] == 3 and cur['finished'] is False, cur
+    cur = req(client, 'POST', '/api/v1/student/next', token=tok).json()
+    assert cur['finished'] is True, cur
+    # next après la fin -> refusé
+    done = client.post('/api/v1/student/next', headers=h)
+    assert done.status_code == 409, done.text
+    # récap perso disponible : 2 réponses, correction du QCM incluse
+    own = req(client, 'GET', '/api/v1/student/results', token=tok).json()
+    assert own['finished_at'] and own['total_slides'] == 3 and own['answered'] == 2, own
+    by_num = {s['number']: s for s in own['slides']}
+    assert by_num[1]['correction'] == {'selected': ['B']}
+    assert 'correction' not in by_num[2]  # F sans classlive_answer
+    assert by_num[3]['answered'] is False
+    # le formateur voit aussi le résultat (identifié, mode autonome non anonyme)
+    res = req(client, 'GET', f'/api/v1/live/{lid}/results', token=trainer).json()
+    assert res['results'][0]['nom'] == 'Moreau' and res['results'][0]['answered'] == 2, res
+    print('[5] Autonome après_question : next bloqué, verrouillage, correction, récap de fin.')
+    teardown_live(client, trainer, ctx)
+
+    # correction_mode='jamais' : aucune correction, même en fin de parcours
+    ctx = make_live(client, trainer, 'Autonome', 'Jamais',
+                    slides=[('QCM auto', 'Q', QCM_CONTENT)],
+                    mode='autonome', correction='jamais')
+    tok, _ = join_student(client, ctx['session_code'], 'Petit', 'Hugo')
+    h = student_headers(tok)
+    client.post('/api/v1/student/answers', headers=h, json={'answer': {'selected': ['B']}})
+    cur = req(client, 'POST', '/api/v1/student/next', token=tok).json()
+    assert cur['finished'] is True, cur
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert 'correction' not in cur, cur
+    own = req(client, 'GET', '/api/v1/student/results', token=tok).json()
+    assert 'correction' not in own['slides'][0], own
+    print('[5] Autonome jamais : aucune correction affichée.')
+    teardown_live(client, trainer, ctx)
+
+    # correction_mode='à_la_fin' : correction seulement une fois terminé
+    ctx = make_live(client, trainer, 'Autonome', 'ALaFin',
+                    slides=[('QCM auto', 'Q', QCM_CONTENT)],
+                    mode='autonome', correction='à_la_fin')
+    tok, _ = join_student(client, ctx['session_code'], 'Bernard', 'Léa')
+    h = student_headers(tok)
+    client.post('/api/v1/student/answers', headers=h, json={'answer': {'selected': ['B']}})
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert cur['finished'] is False and 'correction' not in cur, cur
+    cur = req(client, 'POST', '/api/v1/student/next', token=tok).json()
+    assert cur['finished'] is True, cur
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert cur['correction'] == {'selected': ['B']}, cur
+    print('[5] Autonome à_la_fin : correction révélée uniquement en fin de parcours.')
+    teardown_live(client, trainer, ctx)
+
+
+# ── [6] Agrégation multi-sessions d'un même événement ───────────────────────
+
+def scenario_multi_sessions(client, trainer):
+    """Deux lives successifs sur le même événement : student-results agrège les
+    deux sessions et l'export événement contient les deux live_id."""
+    g, e = make_group_event(client, trainer, 'Multi', 'Séances multiples')
+    base = f'/api/v1/groups/{g}/events/{e}/slides'
+    add_slide(client, trainer, base, 'QCM simple', 'Q', QCM_CONTENT)
+
+    lids = []
+    for n in (1, 2):
+        live = req(client, 'POST', '/api/v1/live/start', token=trainer,
+                   json={'group': g, 'title': e}).json()
+        lids.append(live['live_id'])
+        tok, _ = join_student(client, live['session_code'], 'Durand', 'Marie')
+        r = client.post('/api/v1/student/answers', headers=student_headers(tok),
+                        json={'answer': {'selected': ['B']}})
+        assert r.status_code == 200, r.text
+        # on arrête mais on garde la session : c'est l'agrégation qui est testée
+        req(client, 'POST', f"/api/v1/live/{live['live_id']}/stop", token=trainer)
+
+    sessions = req(client, 'GET', f'/api/v1/groups/{g}/events/{e}/sessions',
+                   token=trainer).json()
+    assert len(sessions['sessions']) == 2, sessions
+    sr = req(client, 'GET', f'/api/v1/groups/{g}/events/{e}/student-results',
+             token=trainer, params={'nom': 'Durand', 'prenom': 'Marie'}).json()
+    assert sr['total_answers'] == 2 and len(sr['sessions']) == 2, sr
+    rows = read_csv(client.get(f'/api/v1/groups/{g}/events/{e}/export.csv',
+                               headers=student_headers(trainer)))
+    assert len(rows) == 2 and {r['live_id'] for r in rows} == set(lids), rows
+    assert all(r['nom'] == 'Durand' for r in rows), rows
+    print('[6] Multi-sessions : 2 lives agrégés dans student-results et l\'export événement.')
+
+    req(client, 'DELETE', f'/api/v1/groups/{g}/events/{e}/sessions', token=trainer)
+    req(client, 'DELETE', f'/api/v1/groups/{g}/events/{e}', token=trainer)
+    req(client, 'DELETE', f'/api/v1/groups/{g}', token=trainer)
 
 
 def main():
@@ -417,6 +607,8 @@ def main():
                 scenario_verrouillage(client, trainer)
                 scenario_planification(client, trainer)
                 scenario_anonyme(client, trainer)
+                scenario_autonome(client, trainer)
+                scenario_multi_sessions(client, trainer)
             print('\nSUCCÈS : scénario formateur + 40 étudiants validé de bout en bout.')
         except Exception:
             print('\n--- Journaux du serveur éphémère ---\n' + srv.log_tail(), file=sys.stderr)

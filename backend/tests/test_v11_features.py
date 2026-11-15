@@ -144,6 +144,12 @@ def test_mode_anonyme_masque_identites_mais_pas_les_donnees(client):
     rows = list(csv.DictReader(io.StringIO(client.get(f'/api/v1/live/{lid}/export.csv').content.decode('utf-8-sig')), delimiter=';'))
     assert rows[0]['nom'] == 'anonyme' and rows[0]['prenom'] == ''
     assert json.loads(rows[0]['reponse_json']) == {'selected': ['A']}
+    # tous les exports CSV masquent les identités en mode anonyme
+    client.post('/api/v1/student/questions', headers=h, json={'text': 'Une question ?'})
+    prows = list(csv.DictReader(io.StringIO(client.get(f'/api/v1/live/{lid}/presence.csv').content.decode('utf-8-sig')), delimiter=';'))
+    assert prows[0]['nom'] == 'anonyme' and prows[0]['prenom'] == ''
+    qrows = list(csv.DictReader(io.StringIO(client.get(f'/api/v1/live/{lid}/questions.csv').content.decode('utf-8-sig')), delimiter=';'))
+    assert qrows[0]['nom'] == 'anonyme' and qrows[0]['prenom'] == '' and qrows[0]['question'] == 'Une question ?'
     # l'élève garde son identité côté client ; student-results par nom fonctionne toujours
     assert client.post('/api/v1/student/resume', headers=h).json()['nom'] == 'Dupont'
     sr = client.get(f'/api/v1/groups/{g}/events/{e}/student-results', params={'nom': 'Dupont', 'prenom': 'Marie'})

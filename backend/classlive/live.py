@@ -833,22 +833,29 @@ class LiveStore:
         return self.csv([s['id'] for s in found['sessions']])
 
     def presence_csv(self, lid):
-        """CSV de présence : qui s'est inscrit, quand, dernière activité, statut en ligne."""
+        """CSV de présence : qui s'est inscrit, quand, dernière activité, statut en ligne.
+        En session anonyme, les identités sont masquées comme dans les autres exports."""
         st = self.students(lid)
+        with self.db() as con:
+            anon = bool(self._live(con, lid)['anonymous'])
         output = io.StringIO(newline='')
         writer = csv.writer(output, delimiter=';')
         writer.writerow(['live_id','nom','prenom','statut','rejoint_le','derniere_activite','reponses'])
         for s in st['students']:
-            writer.writerow([lid, s['nom'], s['prenom'], s['status'], s['joined_at'], s['last_seen'], s['answered']])
+            nom, prenom = ('anonyme', '') if anon else (s['nom'], s['prenom'])
+            writer.writerow([lid, nom, prenom, s['status'], s['joined_at'], s['last_seen'], s['answered']])
         return '\ufeff' + output.getvalue()
 
     def questions_csv(self, lid):
         q = self.list_questions(lid)
+        with self.db() as con:
+            anon = bool(self._live(con, lid)['anonymous'])
         output = io.StringIO(newline='')
         writer = csv.writer(output, delimiter=';')
         writer.writerow(['live_id','question_id','nom','prenom','question','repondu','reponse','date_question','date_reponse'])
         for r in q['questions']:
-            writer.writerow([lid, r['id'], r['nom'], r['prenom'], r['text'], int(r['answered']),
+            nom, prenom = ('anonyme', '') if anon else (r['nom'], r['prenom'])
+            writer.writerow([lid, r['id'], nom, prenom, r['text'], int(r['answered']),
                              r['answer_text'] or '', r['asked_at'], r['answered_at'] or ''])
         return '\ufeff' + output.getvalue()
 
