@@ -30,7 +30,7 @@ else
 fi
 "$PY" -c 'import pytest,fastapi,httpx,websockets'
 
-echo '[1/6] Contrôle syntaxique installateur / scripts'
+echo '[1/7] Contrôle syntaxique installateur / scripts'
 for script in deploy/install-debian13.sh test_classlive_curl.sh tests/test_classlive_curl.sh tests/run_suite_complete.sh; do
   bash -n "$script"
 done
@@ -46,19 +46,22 @@ else
   exit "$result"
 fi
 
-echo '[2/6] Tests unitaires + API (inclut inventaire des 80 routes HTTP et sécurité)'
+echo '[2/7] Tests unitaires + API (inclut inventaire des 80 routes HTTP et sécurité)'
 "$PY" -m pytest -q -p no:cacheprovider --disable-warnings --cov=classlive --cov-report=term-missing --cov-fail-under=100
 
-echo '[3/6] Scénario curl intégral sur serveur éphémère'
+echo '[3/7] Scénario curl intégral sur serveur éphémère'
 "$PY" tests/test_curl_isole.py
 
-echo '[4/6] Tests WebSocket et concurrence sur serveur éphémère'
+echo '[4/7] Tests WebSocket et concurrence sur serveur éphémère'
 "$PY" tests/test_reseau_multiclients.py --students "${CLASSLIVE_TEST_STUDENTS:-30}"
 
-echo '[5/6] Soak test court (stabilité ping/pong + navigation)'
+echo '[5/7] Soak test court (stabilité ping/pong + navigation)'
 "$PY" tests/test_soak.py --duree "${CLASSLIVE_SOAK_DUREE:-20}" --students "${CLASSLIVE_SOAK_STUDENTS:-5}"
 
-echo '[6/6] Vérification ZIP source et documentation test'
+echo '[6/7] Scénario formateur + 40 étudiants (cas honnête, cas limites inclus)'
+"$PY" tests/test_scenario_formateur_40.py
+
+echo '[7/7] Vérification ZIP source et documentation test'
 test -f tests/MATRICE_COUVERTURE.md
 test -f classlive/GUIDE_CLASSLIVE.md
 
