@@ -18,11 +18,13 @@ jobs:
           python-version: '3.13'
 
       - name: Install dependencies
+        working-directory: backend
         run: |
           python -m pip install --upgrade pip
           pip install -e '.[test]' pytest-cov
 
       - name: Syntax check shell scripts
+        working-directory: backend
         run: |
           bash -n deploy/install-debian13.sh
           bash -n test_classlive_curl.sh
@@ -30,16 +32,21 @@ jobs:
           bash -n tests/run_suite_complete.sh
 
       - name: Python compile check
+        working-directory: backend
         run: python -m compileall -q classlive tests
 
       - name: Pytest avec couverture (seuil 100 %)
+        working-directory: backend
         run: python -m pytest -q -p no:cacheprovider --disable-warnings --cov=classlive --cov-report=term-missing --cov-fail-under=100
 
       - name: Scénario curl sur serveur éphémère
+        working-directory: backend
         run: python tests/test_curl_isole.py
 
       - name: Tests réseau 30 étudiants
+        working-directory: backend
         run: python tests/test_reseau_multiclients.py --students 30
 
       - name: Soak test court (20 s, 5 étudiants)
+        working-directory: backend
         run: python tests/test_soak.py --duree 20 --students 5
