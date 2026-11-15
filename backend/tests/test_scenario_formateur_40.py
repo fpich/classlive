@@ -16,7 +16,11 @@ Six scénarios indépendants, tous sur la même instance éphémère :
   [5] mode autonome : progression perso, verrouillage après réponse, correction
       après_question / jamais / à_la_fin, récapitulatif élève ;
   [6] agrégation multi-sessions : student-results et export événement sur
-      plusieurs lives du même événement.
+      plusieurs lives du même événement ;
+  [7] campagne de cas limites : étudiants difficiles (mauvais code, nom
+      vide/trop long, double join, jetons bidons, réponses hors limites) et
+      appels formateur adverses (goto hors bornes, correction sur slide sans
+      corrigé, kick, arrêt puis appels refusés).
 
 Ne touche jamais au ClassLive de production : instance éphémère sur un port
 libre, workspace SQLite temporaire, tout est détruit à la fin.
@@ -596,6 +600,158 @@ def scenario_multi_sessions(client, trainer):
     req(client, 'DELETE', f'/api/v1/groups/{g}', token=trainer)
 
 
+# ── [7] Campagne de cas limites ─────────────────────────────────────────────
+
+def scenario_limites(client, trainer):
+    """Étudiants difficiles + appels formateur adverses. Chaque assertion
+    encode un comportement confirmé par sondage contre l'API réelle."""
+    ctx = make_live(client, trainer, 'Limites', 'Adversarial',
+                    slides=[
+                        ('Intro', 'C', '# intro'),
+                        ('QCM', 'Q', QCM_CONTENT),
+                        ('QCM sans corrigé', 'Q', '# Q sans classlive_answer ?\n- A\n- B'),
+                    ])
+    lid, code = ctx['live_id'], ctx['session_code']
+    H = student_headers(trainer)
+
+    # ── Jointures adverses ──
+    assert client.post('/api/v1/student/join',
+                       json={'session_code': '000000', 'nom': 'X', 'prenom': 'Y'}).status_code == 404
+    for bad in ({'nom': '', 'prenom': 'Y'}, {'nom': '   ', 'prenom': 'Y'},
+                {'nom': 'x' * 101, 'prenom': 'Y'}, {'nom': 'X', 'prenom': ''}):
+        r = client.post('/api/v1/student/join', json={'session_code': code, **bad})
+        assert r.status_code == 422, (bad, r.status_code, r.text)
+    assert client.post('/api/v1/student/join',
+                       json={'session_code': code, 'nom': 'x' * 100, 'prenom': 'Y'}).status_code == 200
+    # double join même identité : autorisé, deux participations distinctes
+    t1, p1 = join_student(client, code, 'Durand', 'Marie')
+    t2, p2 = join_student(client, code, 'Durand', 'Marie')
+    assert p1 != p2
+    h1 = student_headers(t1)
+    # jeton bidon / sans header
+    assert client.post('/api/v1/student/resume',
+                       headers={'Authorization': 'Bearer bidon'}).status_code == 401
+    assert client.post('/api/v1/student/resume').status_code == 401
+
+    # ── Réponse sur slide de contenu -> 409 ──
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': ['A']}}).status_code == 409
+
+    # ── Navigation formateur hors bornes ──
+    assert client.post(f'/api/v1/live/{lid}/goto', headers=H, json={'number': 0}).status_code == 422
+    assert client.post(f'/api/v1/live/{lid}/goto', headers=H, json={'number': -1}).status_code == 422
+    assert client.post(f'/api/v1/live/{lid}/goto', headers=H, json={'number': 999}).status_code == 404
+    assert client.post(f'/api/v1/live/{lid}/goto', headers=H, json={'number': '2'}).status_code == 422
+
+    # ── Correction : slide C -> 409, Q sans corrigé -> 409, Q avec -> ok ──
+    req(client, 'POST', f'/api/v1/live/{lid}/goto', token=trainer, json={'number': 1})
+    assert client.post(f'/api/v1/live/{lid}/correction/show', headers=H).status_code == 409
+    req(client, 'POST', f'/api/v1/live/{lid}/goto', token=trainer, json={'number': 3})
+    assert client.post(f'/api/v1/live/{lid}/correction/show', headers=H).status_code == 409
+    req(client, 'POST', f'/api/v1/live/{lid}/goto', token=trainer, json={'number': 2})
+    req(client, 'POST', f'/api/v1/live/{lid}/correction/show', token=trainer)
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': ['B']}}).status_code == 409
+    req(client, 'POST', f'/api/v1/live/{lid}/correction/hide', token=trainer)
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': ['B']}}).status_code == 200
+    # réponse modifiée après coup : la dernière est conservée
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': ['A']}}).status_code == 200
+    res = req(client, 'GET', f'/api/v1/live/{lid}/results', token=trainer).json()
+    durand = next(r for r in res['results'] if r['nom'] == 'Durand' and r['answered'] == 1)
+    assert durand['answers'][0]['answer'] == {'selected': ['A']}, durand
+
+    # ── Annonce : 500 car ok, 501 -> 422, persistée pour les arrivants tardifs ──
+    assert client.post(f'/api/v1/live/{lid}/announce', headers=H,
+                       json={'text': 'a' * 500}).status_code == 200
+    assert client.post(f'/api/v1/live/{lid}/announce', headers=H,
+                       json={'text': 'a' * 501}).status_code == 422
+    req(client, 'POST', f'/api/v1/live/{lid}/announce', token=trainer,
+        json={'text': 'Bienvenue !'})
+    t3, _ = join_student(client, code, 'Leroy', 'Emma')
+    cur = req(client, 'GET', '/api/v1/student/current', token=t3).json()
+    assert cur['announcement'] == 'Bienvenue !', cur
+
+    # ── Questions : 1000 car ok, 1001 -> 422, 50 max par élève ──
+    assert client.post('/api/v1/student/questions', headers=h1,
+                       json={'text': 'a' * 1000}).status_code == 200
+    assert client.post('/api/v1/student/questions', headers=h1,
+                       json={'text': 'a' * 1001}).status_code == 422
+    for i in range(49):
+        assert client.post('/api/v1/student/questions', headers=h1,
+                           json={'text': f'q{i}'}).status_code == 200
+    assert client.post('/api/v1/student/questions', headers=h1,
+                       json={'text': 'q51'}).status_code == 409
+
+    # ── Réactions : emoji 8 car ok, 9 car -> 422 ──
+    assert client.post('/api/v1/student/reaction', headers=h1,
+                       json={'emoji': 'x' * 8}).status_code == 200
+    assert client.post('/api/v1/student/reaction', headers=h1,
+                       json={'emoji': 'x' * 9}).status_code == 422
+
+    # ── Réponses : >64 Ko -> 422, non-dict -> 422 ──
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': ['B'], 'pad': 'x' * 66000}}).status_code == 422
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': [1, 2]}).status_code == 422
+
+    # ── Kick : pid inexistant -> 404, bon pid -> 401 partout, double kick -> 404 ──
+    assert client.delete(f'/api/v1/live/{lid}/students/999999', headers=H).status_code == 404
+    assert client.delete(f'/api/v1/live/{lid}/students/{p1}', headers=H).status_code == 200
+    assert client.post('/api/v1/student/resume', headers=h1).status_code == 401
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': ['B']}}).status_code == 401
+    assert client.get('/api/v1/student/current', headers=h1).status_code == 401
+    assert client.delete(f'/api/v1/live/{lid}/students/{p1}', headers=H).status_code == 404
+
+    # ── Démarrages adverses ──
+    assert client.post('/api/v1/live/start', headers=H, json={
+        'group': ctx['g'], 'title': 'Autre', 'start_at': '2020-01-01T00:00:00+00:00'}).status_code == 422
+    assert client.post('/api/v1/live/start', headers=H, json={
+        'group': ctx['g'], 'title': 'Autre', 'mode': 'hybride'}).status_code == 422
+    assert client.post('/api/v1/live/start', headers=H, json={
+        'group': 'Nope', 'title': 'X'}).status_code == 404
+    # 2e live sur le même événement pendant que le 1er tourne -> 409
+    assert client.post('/api/v1/live/start', headers=H, json={
+        'group': ctx['g'], 'title': ctx['e']}).status_code == 409
+
+    # ── student-results inconnu -> 0 réponse ──
+    sr = req(client, 'GET', f'/api/v1/groups/{ctx["g"]}/events/{ctx["e"]}/student-results',
+             token=trainer, params={'nom': 'Inconnu', 'prenom': 'X'}).json()
+    assert sr['total_answers'] == 0, sr
+
+    # ── Export CSV sans aucune réponse : entête seule ──
+    g2, e2 = make_group_event(client, trainer, 'Limites Vide', 'Vide')
+    b2 = f'/api/v1/groups/{g2}/events/{e2}/slides'
+    add_slide(client, trainer, b2, 'QCM', 'Q', QCM_CONTENT)
+    live2 = req(client, 'POST', '/api/v1/live/start', token=trainer,
+                json={'group': g2, 'title': e2}).json()
+    rows = read_csv(client.get(f'/api/v1/live/{live2["live_id"]}/export.csv', headers=H))
+    assert rows == [], rows
+    teardown_live(client, trainer, {'g': g2, 'e': e2, 'live_id': live2['live_id']})
+
+    # ── Après stop : join 404, next 409, endpoints élève 401, stop idempotent ──
+    req(client, 'POST', f'/api/v1/live/{lid}/stop', token=trainer)
+    assert client.post('/api/v1/student/join',
+                       json={'session_code': code, 'nom': 'Z', 'prenom': 'Z'}).status_code == 404
+    assert client.post(f'/api/v1/live/{lid}/next', headers=H).status_code == 409
+    h3 = student_headers(t3)
+    assert client.post('/api/v1/student/resume', headers=h3).status_code == 401
+    assert client.get('/api/v1/student/current', headers=h3).status_code == 401
+    assert client.post('/api/v1/student/answers', headers=h3,
+                       json={'answer': {'selected': ['B']}}).status_code == 401
+    assert client.post('/api/v1/student/reaction', headers=h3,
+                       json={'emoji': '👍'}).status_code == 401
+    assert req(client, 'POST', f'/api/v1/live/{lid}/stop', token=trainer).json()['status'] == 'ended'
+    print('[7] Cas limites : joins adverses, tailles max, correction, kick, arrêt — tous conformes.')
+
+    req(client, 'DELETE', f'/api/v1/live/{lid}', token=trainer)
+    req(client, 'DELETE', f'/api/v1/groups/{ctx["g"]}/events/{ctx["e"]}/sessions', token=trainer)
+    req(client, 'DELETE', f'/api/v1/groups/{ctx["g"]}/events/{ctx["e"]}', token=trainer)
+    req(client, 'DELETE', f'/api/v1/groups/{ctx["g"]}', token=trainer)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='classlive-formateur-40-') as tmp:
         srv = Server(Path(tmp))
@@ -609,6 +765,7 @@ def main():
                 scenario_anonyme(client, trainer)
                 scenario_autonome(client, trainer)
                 scenario_multi_sessions(client, trainer)
+                scenario_limites(client, trainer)
             print('\nSUCCÈS : scénario formateur + 40 étudiants validé de bout en bout.')
         except Exception:
             print('\n--- Journaux du serveur éphémère ---\n' + srv.log_tail(), file=sys.stderr)

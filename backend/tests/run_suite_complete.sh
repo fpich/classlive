@@ -58,7 +58,7 @@ echo '[4/7] Tests WebSocket et concurrence sur serveur éphémère'
 echo '[5/7] Soak test court (stabilité ping/pong + navigation)'
 "$PY" tests/test_soak.py --duree "${CLASSLIVE_SOAK_DUREE:-20}" --students "${CLASSLIVE_SOAK_STUDENTS:-5}"
 
-echo '[6/7] Scénario formateur + 40 étudiants (cours complet, verrouillage, planification, anonyme, autonome, multi-sessions)'
+echo '[6/7] Scénario formateur + 40 étudiants (cours complet, verrouillage, planification, anonyme, autonome, multi-sessions, cas limites)'
 "$PY" tests/test_scenario_formateur_40.py
 
 echo '[7/7] Vérification ZIP source et documentation test'
