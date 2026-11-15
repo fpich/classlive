@@ -240,7 +240,6 @@ function Countdown({ expiresAt }: { expiresAt: string }) {
 function isAnswerComplete(type: string, answer: Record<string, unknown>, content?: string): boolean {
   switch (type) {
     case 'T': {
-      // Tous les trous (___) du contenu doivent être remplis
       const nbTrous = content ? (content.match(/_{2,}/g) || []).length : 0
       const blanks = (answer.blanks as string[]) || []
       return blanks.length >= nbTrous && blanks.every((b) => b && b.trim())
@@ -256,6 +255,21 @@ function isAnswerComplete(type: string, answer: Record<string, unknown>, content
       return typeof answer.value === 'number'
     case 'I':
       return typeof answer.x === 'number' && typeof answer.y === 'number'
+    case 'O': {
+      const items = content ? (content.match(/^\s*(?:[-*+]\s+|\d+\.\s+)/gm) || []).length : 0
+      const order = (answer.order as string[]) || []
+      return order.length >= items && order.every((o) => o && o.trim())
+    }
+    case 'R': {
+      const items = content ? (content.match(/^\s*(?:[-*+]\s+|\d+\.\s+)/gm) || []).length : 0
+      const cats = (answer.categories as Record<string, string>) || {}
+      return Object.keys(cats).length >= items && Object.values(cats).every((c) => c && c.trim())
+    }
+    case 'A': {
+      const pairs = content ? (content.match(/=>/g) || []).length : 0
+      const p = (answer.pairs as Record<string, string>) || {}
+      return Object.keys(p).length >= pairs && Object.values(p).every((r) => r && r.trim())
+    }
     default:
       return Object.keys(answer).length > 0
   }
