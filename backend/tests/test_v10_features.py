@@ -40,6 +40,26 @@ def test_nouveaux_types_creations_et_types_invalides(client):
     assert client.patch(f'{base}/{f_slide}', json={'new_type': 'Z'}).status_code == 422
 
 
+def test_qcm_validation_selected_durcie(client):
+    # Q durci au niveau forme : selected présent -> liste de chaînes (les options
+    # restent libres : emoji, 500 car, chaîne vide — rétrocompat), dict vide accepté.
+    g, e, base, _ = make_event(client, kinds=('C', 'Q'))
+    live = start_live(client, g, e)
+    lid = live['live_id']
+    s = join(client, live['session_code'])
+    h = student_headers(s)
+    assert client.post(f'/api/v1/live/{lid}/next').status_code == 200  # -> QCM
+    def answer(payload):
+        return client.post('/api/v1/student/answers', headers=h, json={'answer': payload})
+    assert answer({'selected': 'A'}).status_code == 422       # pas une liste
+    assert answer({'selected': [1]}).status_code == 422       # élément non chaîne
+    assert answer({'selected': ['A', 2]}).status_code == 422
+    assert answer({}).status_code == 200                      # dict vide toléré (rétrocompat)
+    assert answer({'selected': []}).status_code == 200        # liste vide tolérée (rétrocompat)
+    assert answer({'selected': ['A', 'B']}).status_code == 200
+    assert answer({'selected': ['🎉', 'A' * 500, '']}).status_code == 200  # options libres
+
+
 def test_nouveaux_types_submit_valide_et_invalide(client):
     g, e, base, _ = make_event(client, kinds=('C', 'F', 'P', 'N', 'L'))
     live = start_live(client, g, e)

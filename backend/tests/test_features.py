@@ -375,6 +375,22 @@ def test_max_students_zero_illimite(tmp_path):
         assert len(c.get(f'/api/v1/live/{live["live_id"]}/students').json()['students']) == 5
 
 
+def test_max_students_409_isole_du_rate_limit(tmp_path):
+    # join_rate_limit désactivé : le 3e join échoue à cause de max_students=2 (409), pas du 429
+    with app_client(tmp_path, max_students=2, join_rate_limit=0) as c:
+        g, e, _, _ = make_event(c)
+        live = start_live(c, g, e)
+        code = live['session_code']
+        for i in range(2):
+            assert c.post('/api/v1/student/join', json={
+                'session_code': code, 'nom': f'N{i}', 'prenom': 'P'}).status_code == 200
+        r = c.post('/api/v1/student/join', json={'session_code': code, 'nom': 'N2', 'prenom': 'P'})
+        assert r.status_code == 409 and 'pleine' in r.json()['detail']
+        for i in range(3, 10):  # toujours 409, jamais 429
+            r = c.post('/api/v1/student/join', json={'session_code': code, 'nom': f'N{i}', 'prenom': 'P'})
+            assert r.status_code == 409, r.status_code
+
+
 def test_join_rate_limit_anti_bruteforce(tmp_path):
     with app_client(tmp_path, join_rate_limit=3) as c:
         g, e, _, _ = make_event(c)

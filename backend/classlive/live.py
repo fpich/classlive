@@ -570,16 +570,26 @@ class LiveStore:
 
     @staticmethod
     def _validate_answer(kind: str, answer: dict):
-        """Validation de forme pour les nouveaux types F/P/N/L (les types historiques restent permissifs)."""
-        if kind == 'F':  # texte libre
-            text = answer.get('text')
-            if not isinstance(text, str) or not text.strip() or len(text) > 5000:
-                raise ValueError('Réponse texte requise (5000 caractères max).')
+        """Validation de forme pour les types F/P/Q/N/L/I.
+
+        Q (rétrocompat) : « selected », s'il est présent, doit être une liste de
+        chaînes — les options restent libres (emoji, longueurs, chaîne vide) ;
+        un dict vide est accepté (réponse « blanche »). P est plus strict :
+        liste non vide d'options de 50 car max, requise."""
+        if kind == 'Q':  # QCM : selected, s'il est présent, est une liste de chaînes (options libres, rétrocompat)
+            selected = answer.get('selected')
+            if selected is not None and (not isinstance(selected, list)
+                                         or any(not isinstance(o, str) for o in selected)):
+                raise ValueError('QCM : selected doit être une liste de chaînes.')
         elif kind == 'P':  # sondage : un choix parmi la liste
             selected = answer.get('selected')
             if not isinstance(selected, list) or not selected \
                     or any(not isinstance(o, str) or not o.strip() or len(o) > 50 for o in selected):
                 raise ValueError('Sondage : selected doit être une liste non vide d’options (50 car max).')
+        elif kind == 'F':  # texte libre
+            text = answer.get('text')
+            if not isinstance(text, str) or not text.strip() or len(text) > 5000:
+                raise ValueError('Réponse texte requise (5000 caractères max).')
         elif kind == 'N':  # nuage de mots : 1 à 5 mots de 30 car max
             words = answer.get('words')
             if not isinstance(words, list) or not 1 <= len(words) <= 5 \

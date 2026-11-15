@@ -20,7 +20,9 @@ Six scénarios indépendants, tous sur la même instance éphémère :
   [7] campagne de cas limites : étudiants difficiles (mauvais code, nom
       vide/trop long, double join, jetons bidons, réponses hors limites) et
       appels formateur adverses (goto hors bornes, correction sur slide sans
-      corrigé, kick, arrêt puis appels refusés).
+      corrigé, kick, arrêt puis appels refusés) ;
+  [8] WebSocket élève en mode autonome : current à la connexion, ping/pong,
+      answer_locked, slide_changed, session_ended.
 
 Ne touche jamais au ClassLive de production : instance éphémère sur un port
 libre, workspace SQLite temporaire, tout est détruit à la fin.
@@ -561,6 +563,29 @@ def scenario_autonome(client, trainer):
     print('[5] Autonome à_la_fin : correction révélée uniquement en fin de parcours.')
     teardown_live(client, trainer, ctx)
 
+    # timing par_question en autonome : timer par élève démarré à la 1re vue
+    ctx = make_live(client, trainer, 'Autonome', 'Timer',
+                    slides=[('QCM auto', 'Q', QCM_CONTENT)],
+                    mode='autonome', timing='par_question', timing_seconds=1,
+                    correction='après_question')
+    tok, _ = join_student(client, ctx['session_code'], 'Fournier', 'Zoé')
+    h = student_headers(tok)
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert cur['question_started_at'] and cur['expires_at'] and cur['locked'] is False, cur
+    time.sleep(1.5)  # deadline (1 s) dépassée
+    r = client.post('/api/v1/student/answers', headers=h,
+                    json={'answer': {'selected': ['B']}})
+    assert r.status_code == 409, r.text  # temps écoulé
+    cur = req(client, 'GET', '/api/v1/student/current', token=tok).json()
+    assert cur['locked'] is True and cur['correction'] == {'selected': ['B']}, cur
+    # slide verrouillée -> next autorisé, fin du parcours ; récap : 0 réponse
+    cur = req(client, 'POST', '/api/v1/student/next', token=tok).json()
+    assert cur['finished'] is True, cur
+    own = req(client, 'GET', '/api/v1/student/results', token=tok).json()
+    assert own['answered'] == 0 and own['slides'][0]['answered'] is False, own
+    print('[5] Autonome par_question : timer expiré -> réponse 409, slide verrouillée, correction affichée.')
+    teardown_live(client, trainer, ctx)
+
 
 # ── [6] Agrégation multi-sessions d'un même événement ───────────────────────
 
@@ -623,10 +648,12 @@ def scenario_limites(client, trainer):
         assert r.status_code == 422, (bad, r.status_code, r.text)
     assert client.post('/api/v1/student/join',
                        json={'session_code': code, 'nom': 'x' * 100, 'prenom': 'Y'}).status_code == 200
-    # double join même identité : autorisé, deux participations distinctes
+    # double join même identité : autorisé (contrat documenté), deux participations
     t1, p1 = join_student(client, code, 'Durand', 'Marie')
     t2, p2 = join_student(client, code, 'Durand', 'Marie')
     assert p1 != p2
+    st = req(client, 'GET', f'/api/v1/live/{lid}/students', token=trainer).json()
+    assert st['total_students'] == 3, st  # 'x'*100 + les deux Durand
     h1 = student_headers(t1)
     # jeton bidon / sans header
     assert client.post('/api/v1/student/resume',
@@ -653,6 +680,13 @@ def scenario_limites(client, trainer):
     assert client.post('/api/v1/student/answers', headers=h1,
                        json={'answer': {'selected': ['B']}}).status_code == 409
     req(client, 'POST', f'/api/v1/live/{lid}/correction/hide', token=trainer)
+    # QCM durci au niveau forme : selected présent -> liste de chaînes
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': 'B'}}).status_code == 422
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {'selected': [1]}}).status_code == 422
+    assert client.post('/api/v1/student/answers', headers=h1,
+                       json={'answer': {}}).status_code == 200  # dict vide toléré (rétrocompat)
     assert client.post('/api/v1/student/answers', headers=h1,
                        json={'answer': {'selected': ['B']}}).status_code == 200
     # réponse modifiée après coup : la dernière est conservée
@@ -752,6 +786,53 @@ def scenario_limites(client, trainer):
     req(client, 'DELETE', f'/api/v1/groups/{ctx["g"]}', token=trainer)
 
 
+# ── [8] WebSocket élève en mode autonome ────────────────────────────────────
+
+def scenario_ws_autonome(client, trainer, base_http):
+    """Flux WebSocket d'un élève en autonome : current à la connexion, ping/pong,
+    answer_locked après réponse, slide_changed à chaque next, session_ended en fin."""
+    from websockets.sync.client import connect
+    ctx = make_live(client, trainer, 'WS Autonome', 'Flux',
+                    slides=[('QCM auto', 'Q', QCM_CONTENT),
+                            ('Fin', 'C', '# fin du parcours')],
+                    mode='autonome', correction='après_question')
+    lid, code = ctx['live_id'], ctx['session_code']
+    tok, _ = join_student(client, code, 'Morel', 'Adam')
+    h = student_headers(tok)
+
+    def recv_until(ws, event, max_events=10):
+        for _ in range(max_events):
+            ev = json.loads(ws.recv(timeout=10))
+            if ev.get('event') == event:
+                return ev
+        raise AssertionError(f'{event} non reçu')
+
+    url = base_http.replace('http://', 'ws://') + '/api/v1/student/ws'
+    with connect(url) as ws:
+        ws.send(json.dumps({'token': tok}))
+        first = json.loads(ws.recv(timeout=10))
+        assert first['event'] == 'current' and first['current']['number'] == 1, first
+        # ping/pong (heartbeat)
+        ws.send(json.dumps({'event': 'ping'}))
+        assert json.loads(ws.recv(timeout=10))['event'] == 'pong'
+        # réponse -> verrouillée -> answer_locked
+        assert client.post('/api/v1/student/answers', headers=h,
+                           json={'answer': {'selected': ['B']}}).status_code == 200
+        ev = recv_until(ws, 'answer_locked')
+        assert ev['slide'].startswith('S001_Q_'), ev
+        # next -> slide_changed (slide 2)
+        req(client, 'POST', '/api/v1/student/next', token=tok)
+        ev = recv_until(ws, 'slide_changed')
+        assert ev['current']['number'] == 2, ev
+        # next sur la dernière slide -> slide_changed puis session_ended
+        req(client, 'POST', '/api/v1/student/next', token=tok)
+        ev = recv_until(ws, 'session_ended')
+        assert ev['live_id'] == lid, ev
+    # après session_ended, le ping ferme la connexion (1008)
+    print('[8] WebSocket autonome : current, pong, answer_locked, slide_changed, session_ended OK.')
+    teardown_live(client, trainer, ctx)
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix='classlive-formateur-40-') as tmp:
         srv = Server(Path(tmp))
@@ -766,6 +847,7 @@ def main():
                 scenario_autonome(client, trainer)
                 scenario_multi_sessions(client, trainer)
                 scenario_limites(client, trainer)
+                scenario_ws_autonome(client, trainer, srv.base)
             print('\nSUCCÈS : scénario formateur + 40 étudiants validé de bout en bout.')
         except Exception:
             print('\n--- Journaux du serveur éphémère ---\n' + srv.log_tail(), file=sys.stderr)
