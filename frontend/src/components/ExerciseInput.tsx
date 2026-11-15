@@ -319,7 +319,41 @@ function renderInline(line: string): React.ReactNode {
   })
 }
 
-// ── Ordonner (O) — boutons haut/bas ───────────────────────────────────────
+// ── Drag & drop natif HTML5 ───────────────────────────────────────────────
+
+function DraggableItem({
+  label, index, onDragStart, onDragOver, onDrop, isDragging, isDropTarget, disabled, className = '',
+}: {
+  label: string
+  index: number
+  onDragStart: (i: number) => void
+  onDragOver: (e: React.DragEvent, i: number) => void
+  onDrop: (i: number) => void
+  isDragging: boolean
+  isDropTarget: boolean
+  disabled?: boolean
+  className?: string
+}) {
+  return (
+    <div
+      draggable={!disabled}
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(index) }}
+      onDragOver={(e) => onDragOver(e, index)}
+      onDrop={(e) => { e.preventDefault(); onDrop(index) }}
+      className={`px-4 py-3 rounded-lg border-2 font-medium transition-all select-none ${
+        disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-grab active:cursor-grabbing'
+      } ${
+        isDragging ? 'opacity-40 border-dashed border-gray-400' : ''
+      } ${
+        isDropTarget ? 'border-brand-500 bg-brand-50 scale-[1.02]' : 'border-gray-200 bg-white hover:border-gray-400'
+      } ${className}`}
+    >
+      {label}
+    </div>
+  )
+}
+
+// ── Ordonner (O) — drag & drop vertical type Wooclap ──────────────────────
 
 export function OrdreInput({ content, value, onChange, disabled }: {
   content: string
@@ -328,60 +362,121 @@ export function OrdreInput({ content, value, onChange, disabled }: {
   disabled?: boolean
 }) {
   const items = useMemo(() => parseListItems(content), [content])
-  // Initialise l'ordre si vide
   const order = value.length === items.length ? value : items
-  const move = (i: number, dir: -1 | 1) => {
-    if (disabled) return
-    const j = i + dir
-    if (j < 0 || j >= order.length) return
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
+
+  const handleDrop = (targetIndex: number) => {
+    if (disabled || dragIndex === null || dragIndex === targetIndex) return
     const next = [...order]
-    ;[next[i], next[j]] = [next[j], next[i]]
+    const [moved] = next.splice(dragIndex, 1)
+    next.splice(targetIndex, 0, moved)
     onChange(next)
+    setDragIndex(null)
+    setDropIndex(null)
   }
+
   return (
     <ol className="space-y-2">
       {order.map((item, i) => (
-        <li key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
-          <span className="font-bold text-brand-600 w-6">{i + 1}.</span>
-          <span className="flex-1">{item}</span>
-          <div className="flex flex-col">
-            <button onClick={() => move(i, -1)} disabled={disabled || i === 0} className="text-gray-500 hover:text-brand-600 disabled:opacity-30 text-xs leading-none">▲</button>
-            <button onClick={() => move(i, 1)} disabled={disabled || i === order.length - 1} className="text-gray-500 hover:text-brand-600 disabled:opacity-30 text-xs leading-none">▼</button>
+        <li key={`${item}-${i}`} className="flex items-center gap-2">
+          <span className="font-bold text-brand-600 w-6 text-center">{i + 1}.</span>
+          <div className="flex-1">
+            <DraggableItem
+              label={item}
+              index={i}
+              onDragStart={setDragIndex}
+              onDragOver={(e, idx) => { e.preventDefault(); setDropIndex(idx) }}
+              onDrop={handleDrop}
+              isDragging={dragIndex === i}
+              isDropTarget={dropIndex === i && dragIndex !== i}
+              disabled={disabled}
+            />
           </div>
+          <span className="text-gray-300 text-lg select-none">⠿</span>
         </li>
       ))}
+      <p className="text-xs text-gray-400 mt-2">Glissez-déposez les éléments pour les réordonner.</p>
     </ol>
   )
 }
 
-// ── Classer (R) — select de catégorie par élément ─────────────────────────
+// ── Classer (R) — drag & drop dans des colonnes de catégories ─────────────
 
 export function ClasserInput({ content, value, onChange, disabled }: {
   content: string
-  value: Record<string, string>  // { élément: catégorie }
+  value: Record<string, string>  // { élément: catégorie } — '' = non classé
   onChange: (v: Record<string, string>) => void
   disabled?: boolean
 }) {
   const cats = useMemo(() => parseCategories(content), [content])
-  const items = useMemo(() => parseListItems(content), [content])
-  const setCat = (item: string, cat: string) => onChange({ ...value, [item]: cat })
+  const allItems = useMemo(() => parseListItems(content), [content])
+  const [dragItem, setDragItem] = useState<string | null>(null)
+  const [dropCat, setDropCat] = useState<string | null>(null)
+
+  // Zone "à classer" = éléments sans catégorie
+  const unclassified = allItems.filter((it) => !value[it])
+  const byCat = (cat: string) => allItems.filter((it) => value[it] === cat)
+
+  const assign = (item: string, cat: string) => {
+    if (disabled) return
+    const next = { ...value }
+    if (cat === '') delete next[item]
+    else next[item] = cat
+    onChange(next)
+    setDragItem(null)
+    setDropCat(null)
+  }
+
   if (cats.length === 0) return <p className="text-gray-400 text-sm">Aucune catégorie trouvée (utilisez **Nom** sur une ligne seule).</p>
+
+  const renderItem = (item: string) => (
+    <DraggableItem
+      key={item}
+      label={item}
+      index={0}
+      onDragStart={() => setDragItem(item)}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={() => {}}
+      isDragging={dragItem === item}
+      isDropTarget={false}
+      disabled={disabled}
+      className="text-sm !py-2"
+    />
+  )
+
+  const DropZone = ({ cat, children, label }: { cat: string; children: React.ReactNode; label: string }) => (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDropCat(cat) }}
+      onDragLeave={() => setDropCat((c) => (c === cat ? null : c))}
+      onDrop={(e) => { e.preventDefault(); if (dragItem) assign(dragItem, cat) }}
+      className={`rounded-xl border-2 p-3 min-h-[80px] transition-colors ${
+        dropCat === cat ? 'border-brand-500 bg-brand-50' : 'border-gray-200 bg-gray-50'
+      }`}
+    >
+      <p className="text-xs font-semibold text-gray-500 uppercase mb-2">{label}</p>
+      <div className="space-y-1">{children}</div>
+      {React.Children.count(children) === 0 && (
+        <p className="text-xs text-gray-300 italic">Déposez ici</p>
+      )}
+    </div>
+  )
+
   return (
-    <div className="space-y-2">
-      {items.map((item, i) => (
-        <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
-          <span className="flex-1 font-medium">{item}</span>
-          <select
-            value={value[item] || ''}
-            onChange={(e) => !disabled && setCat(item, e.target.value)}
-            disabled={disabled}
-            className="px-2 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100"
-          >
-            <option value="">— choisir —</option>
-            {cats.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
-      ))}
+    <div className="space-y-3">
+      {/* Zone à classer */}
+      <DropZone cat="" label="À classer">
+        {unclassified.map(renderItem)}
+      </DropZone>
+      {/* Colonnes par catégorie */}
+      <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${Math.min(cats.length, 3)}, 1fr)` }}>
+        {cats.map((cat) => (
+          <DropZone key={cat} cat={cat} label={cat}>
+            {byCat(cat).map(renderItem)}
+          </DropZone>
+        ))}
+      </div>
+      <p className="text-xs text-gray-400">Glissez-déposez chaque élément dans sa catégorie.</p>
     </div>
   )
 }
