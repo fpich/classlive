@@ -386,7 +386,9 @@ export function ClasserInput({ content, value, onChange, disabled }: {
   )
 }
 
-// ── Association (A) — select droite pour chaque gauche ───────────────────
+// ── Association (A) — interface type Wooclap : deux colonnes + liens SVG ──
+// Clic sur un élément de gauche, puis sur un élément de droite pour lier.
+// Un lien existant peut être supprimé en cliquant dessus.
 
 export function AssociationInput({ content, value, onChange, disabled }: {
   content: string
@@ -395,27 +397,170 @@ export function AssociationInput({ content, value, onChange, disabled }: {
   disabled?: boolean
 }) {
   const pairs = useMemo(() => parsePairs(content), [content])
-  // Toutes les valeurs de droite, mélangées pour l'affichage
+  // Droites mélangées pour l'affichage (une seule fois par content)
   const rights = useMemo(() => shuffle(pairs.map((p) => p.right)), [content])
-  const setRight = (left: string, right: string) => onChange({ ...value, [left]: right })
+  const [selectedLeft, setSelectedLeft] = useState<string | null>(null)
+  const leftRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
+  const rightRefs = React.useRef<Record<string, HTMLButtonElement | null>>({})
+  const containerRef = React.useRef<HTMLDivElement>(null)
+  const [, forceRender] = useState(0)
+
+  // Recalcule les positions des lignes après chaque rendu
+  React.useEffect(() => {
+    forceRender((n) => n + 1)
+  }, [value, selectedLeft])
+
   if (pairs.length === 0) return <p className="text-gray-400 text-sm">Aucune paire trouvée (format : - gauche =&gt; droite).</p>
+
+  // Droite déjà prise par une autre gauche ?
+  const isRightTaken = (r: string) => Object.values(value).includes(r)
+
+  const link = (left: string, right: string) => {
+    if (disabled) return
+    // Si la droite est déjà liée à une autre gauche, on écrase
+    const next = { ...value }
+    for (const k of Object.keys(next)) if (next[k] === right) delete next[k]
+    next[left] = right
+    onChange(next)
+    setSelectedLeft(null)
+  }
+
+  const unlink = (left: string) => {
+    if (disabled) return
+    const next = { ...value }
+    delete next[left]
+    onChange(next)
+  }
+
+  const handleLeftClick = (left: string) => {
+    if (disabled) return
+    setSelectedLeft(selectedLeft === left ? null : left)
+  }
+
+  const handleRightClick = (right: string) => {
+    if (disabled || !selectedLeft) return
+    link(selectedLeft, right)
+  }
+
+  // Calcul des lignes SVG entre les éléments liés
+  const getLinkCoords = (left: string, right: string) => {
+    const l = leftRefs.current[left]
+    const r = rightRefs.current[right]
+    const c = containerRef.current
+    if (!l || !r || !c) return null
+    const lr = l.getBoundingClientRect()
+    const rr = r.getBoundingClientRect()
+    const cr = c.getBoundingClientRect()
+    return {
+      x1: lr.right - cr.left,
+      y1: lr.top + lr.height / 2 - cr.top,
+      x2: rr.left - cr.left,
+      y2: rr.top + rr.height / 2 - cr.top,
+    }
+  }
+
+  const links = Object.entries(value)
+    .map(([l, r]) => ({ left: l, right: r, coords: getLinkCoords(l, r) }))
+    .filter((x) => x.coords)
+
   return (
-    <div className="space-y-2">
-      {pairs.map((p, i) => (
-        <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2 border border-gray-200">
-          <span className="flex-1 font-medium">{p.left}</span>
-          <span className="text-gray-400">→</span>
-          <select
-            value={value[p.left] || ''}
-            onChange={(e) => !disabled && setRight(p.left, e.target.value)}
-            disabled={disabled}
-            className="px-2 py-1 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-100"
-          >
-            <option value="">— choisir —</option>
-            {rights.map((r, j) => <option key={j} value={r}>{r}</option>)}
-          </select>
+    <div ref={containerRef} className="relative">
+      {/* Lignes SVG de liaison */}
+      <svg className="absolute inset-0 pointer-events-none" style={{ width: '100%', height: '100%', zIndex: 0 }}>
+        {links.map((lk, i) => lk.coords && (
+          <line
+            key={i}
+            x1={lk.coords.x1} y1={lk.coords.y1}
+            x2={lk.coords.x2} y2={lk.coords.y2}
+            stroke="#3380fc" strokeWidth="3" strokeLinecap="round"
+          />
+        ))}
+        {/* Ligne temporaire vers la sélection en cours */}
+        {selectedLeft && (() => {
+          const l = leftRefs.current[selectedLeft]
+          const c = containerRef.current
+          if (!l || !c) return null
+          const lr = l.getBoundingClientRect()
+          const cr = c.getBoundingClientRect()
+          return (
+            <line
+              x1={lr.right - cr.left} y1={lr.top + lr.height / 2 - cr.top}
+              x2={lr.right - cr.left + 40} y2={lr.top + lr.height / 2 - cr.top}
+              stroke="#59a3ff" strokeWidth="2" strokeDasharray="4 3"
+            />
+          )
+        })()}
+      </svg>
+
+      <div className="flex gap-8 relative" style={{ zIndex: 1 }}>
+        {/* Colonne gauche */}
+        <div className="flex-1 space-y-2">
+          <p className="text-xs text-gray-400 uppercase mb-1">Éléments</p>
+          {pairs.map((p, i) => {
+            const isSelected = selectedLeft === p.left
+            const isLinked = !!value[p.left]
+            return (
+              <button
+                key={i}
+                ref={(el) => { leftRefs.current[p.left] = el }}
+                onClick={() => handleLeftClick(p.left)}
+                disabled={disabled}
+                className={`w-full text-left px-4 py-3 rounded-lg border-2 font-medium transition-all ${
+                  isSelected
+                    ? 'border-brand-500 bg-brand-50 text-brand-700'
+                    : isLinked
+                      ? 'border-green-400 bg-green-50 text-green-800'
+                      : 'border-gray-200 bg-white hover:border-gray-400'
+                } disabled:opacity-60`}
+              >
+                {p.left}
+                {isLinked && (
+                  <span
+                    role="button"
+                    onClick={(e) => { e.stopPropagation(); unlink(p.left) }}
+                    className="float-right text-green-500 hover:text-red-500 text-xs"
+                    title="Supprimer le lien"
+                  >✕</span>
+                )}
+              </button>
+            )
+          })}
         </div>
-      ))}
+
+        {/* Colonne droite */}
+        <div className="flex-1 space-y-2">
+          <p className="text-xs text-gray-400 uppercase mb-1">Réponses</p>
+          {rights.map((r, i) => {
+            const taken = isRightTaken(r)
+            const linkedTo = Object.entries(value).find(([, rv]) => rv === r)?.[0]
+            return (
+              <button
+                key={i}
+                ref={(el) => { rightRefs.current[r] = el }}
+                onClick={() => handleRightClick(r)}
+                disabled={disabled || (taken && linkedTo !== selectedLeft)}
+                className={`w-full text-left px-4 py-3 rounded-lg border-2 transition-all ${
+                  taken
+                    ? 'border-green-400 bg-green-50 text-green-800 opacity-70'
+                    : selectedLeft
+                      ? 'border-brand-300 bg-white hover:border-brand-500 hover:bg-brand-50 cursor-pointer'
+                      : 'border-gray-200 bg-gray-50 text-gray-500'
+                } disabled:cursor-not-allowed`}
+              >
+                {r}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <p className="text-xs text-gray-400 mt-3">
+        {selectedLeft
+          ? `Sélectionnez une réponse pour « ${selectedLeft} » →`
+          : 'Cliquez sur un élément à gauche, puis sur sa réponse à droite.'}
+      </p>
+      {/* Force re-render pour recalculer les lignes après changement */}
+      {void forceRender}
     </div>
   )
 }
