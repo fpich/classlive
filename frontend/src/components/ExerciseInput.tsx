@@ -47,7 +47,19 @@ function shuffle<T>(arr: T[]): T[] {
   return a
 }
 
-// ── QCM (Q) ───────────────────────────────────────────────────────────────
+// ── QCM (Q) — cartes à cocher style Wooclap ───────────────────────────────
+
+// Parse les options : lignes `- A) texte` ou `- [ ] texte` ou `- texte`
+export function parseOptions(content: string): { letter: string; text: string }[] {
+  const lines = content.split('\n')
+    .map((l) => l.replace(/^\s*(?:[-*+]\s+(?:\[[ xX]\]\s+)?)?/, '').trim())
+    .filter((l) => l.length > 0 && !l.startsWith('#'))
+  return lines.map((l, i) => {
+    const m = l.match(/^([A-Z])\)\s*(.+)$/)
+    if (m) return { letter: m[1], text: m[2] }
+    return { letter: String.fromCharCode(65 + i), text: l }
+  })
+}
 
 export function QCMInput({ value, onChange, disabled, content }: {
   value: string[]
@@ -55,44 +67,42 @@ export function QCMInput({ value, onChange, disabled, content }: {
   disabled?: boolean
   content?: string
 }) {
-  // Options = lettres A, B, C... une par ligne `- X)` ou `- [ ] X` dans le contenu
-  const items = content ? parseListItems(content) : []
-  const options = items.length > 0
-    ? items.map((_, idx) => String.fromCharCode(65 + idx))
-    : ['A', 'B', 'C', 'D', 'E', 'F']
-  const toggle = (opt: string) => {
+  const options = content ? parseOptions(content) : []
+  const toggle = (letter: string) => {
     if (disabled) return
-    if (value.includes(opt)) onChange(value.filter((v) => v !== opt))
-    else onChange([...value, opt])
+    if (value.includes(letter)) onChange(value.filter((v) => v !== letter))
+    else onChange([...value, letter])
   }
+  if (options.length === 0) return <p className="text-gray-400 text-sm">Aucune option trouvée (lignes - A) ... dans la slide).</p>
   return (
-    <div>
-      <div className="flex flex-wrap gap-2 mb-2">
-        {options.map((opt) => (
+    <div className="space-y-2">
+      {options.map((opt) => {
+        const selected = value.includes(opt.letter)
+        return (
           <button
-            key={opt}
-            onClick={() => toggle(opt)}
+            key={opt.letter}
+            onClick={() => toggle(opt.letter)}
             disabled={disabled}
-            className={`w-12 h-12 rounded-lg font-bold text-lg transition-colors ${
-              value.includes(opt) ? 'bg-brand-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            } disabled:opacity-50`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border-2 text-left transition-all ${
+              selected
+                ? 'border-brand-500 bg-brand-50 text-brand-800'
+                : 'border-gray-200 bg-white hover:border-gray-400'
+            } disabled:opacity-60`}
           >
-            {opt}
+            <span className={`w-7 h-7 rounded-md border-2 flex items-center justify-center font-bold text-sm shrink-0 ${
+              selected ? 'border-brand-600 bg-brand-600 text-white' : 'border-gray-300 text-gray-500'
+            }`}>
+              {selected ? '✓' : opt.letter}
+            </span>
+            <span className="flex-1">{opt.text}</span>
           </button>
-        ))}
-      </div>
-      {items.length > 0 && (
-        <ul className="text-sm text-gray-600 space-y-1">
-          {items.map((item, i) => (
-            <li key={i}><strong>{String.fromCharCode(65 + i)}</strong> — {item.replace(/^[A-F]\)\s*/, '')}</li>
-          ))}
-        </ul>
-      )}
+        )
+      })}
     </div>
   )
 }
 
-// ── Sondage (P) ───────────────────────────────────────────────────────────
+// ── Sondage (P) — un seul choix, style radio Wooclap ──────────────────────
 
 export function SondageInput({ value, onChange, disabled, content }: {
   value: string[]
@@ -100,38 +110,37 @@ export function SondageInput({ value, onChange, disabled, content }: {
   disabled?: boolean
   content?: string
 }) {
-  const items = content ? parseListItems(content) : []
-  const options = items.length > 0
-    ? items.map((_, i) => String.fromCharCode(65 + i))
-    : ['A', 'B', 'C', 'D', 'E', 'F']
+  const options = content ? parseOptions(content) : []
+  if (options.length === 0) return <p className="text-gray-400 text-sm">Aucune option trouvée.</p>
   return (
-    <div>
-      <div className="flex flex-wrap gap-2 mb-2">
-        {options.map((opt) => (
+    <div className="space-y-2">
+      {options.map((opt) => {
+        const selected = value.includes(opt.letter)
+        return (
           <button
-            key={opt}
-            onClick={() => !disabled && onChange([opt])}
+            key={opt.letter}
+            onClick={() => !disabled && onChange([opt.letter])}
             disabled={disabled}
-            className={`w-12 h-12 rounded-lg font-bold text-lg transition-colors ${
-              value.includes(opt) ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            } disabled:opacity-50`}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl border-2 text-left transition-all ${
+              selected
+                ? 'border-green-500 bg-green-50 text-green-800'
+                : 'border-gray-200 bg-white hover:border-gray-400'
+            } disabled:opacity-60`}
           >
-            {opt}
+            <span className={`w-7 h-7 rounded-full border-2 flex items-center justify-center font-bold text-sm shrink-0 ${
+              selected ? 'border-green-600 bg-green-600 text-white' : 'border-gray-300 text-gray-500'
+            }`}>
+              {opt.letter}
+            </span>
+            <span className="flex-1">{opt.text}</span>
           </button>
-        ))}
-      </div>
-      {items.length > 0 && (
-        <ul className="text-sm text-gray-600 space-y-1">
-          {items.map((item, i) => (
-            <li key={i}><strong>{String.fromCharCode(65 + i)}</strong> — {item.replace(/^[A-F]\)\s*/, '')}</li>
-          ))}
-        </ul>
-      )}
+        )
+      })}
     </div>
   )
 }
 
-// ── Texte libre (F) ───────────────────────────────────────────────────────
+// ── Texte libre (F) — avec compteur ──────────────────────────────────────
 
 export function TexteLibreInput({ value, onChange, disabled }: {
   value: string
@@ -139,19 +148,22 @@ export function TexteLibreInput({ value, onChange, disabled }: {
   disabled?: boolean
 }) {
   return (
-    <textarea
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      disabled={disabled}
-      maxLength={5000}
-      rows={5}
-      placeholder="Votre réponse..."
-      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-50"
-    />
+    <div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        maxLength={5000}
+        rows={6}
+        placeholder="Votre réponse..."
+        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-50 resize-y"
+      />
+      <p className="text-xs text-gray-400 text-right mt-1">{value.length}/5000</p>
+    </div>
   )
 }
 
-// ── Nuage de mots (N) ─────────────────────────────────────────────────────
+// ── Nuage de mots (N) — saisie inline dans un champ avec tags ─────────────
 
 export function NuageMotsInput({ value, onChange, disabled }: {
   value: string[]
@@ -168,32 +180,41 @@ export function NuageMotsInput({ value, onChange, disabled }: {
   }
   return (
     <div>
-      <div className="flex gap-2 mb-2">
+      <div
+        className={`flex flex-wrap items-center gap-1 px-2 py-2 border-2 rounded-xl focus-within:ring-2 focus-within:ring-brand-500 focus-within:border-brand-500 ${
+          disabled ? 'bg-gray-50 border-gray-200' : 'border-gray-300 bg-white'
+        }`}
+        onClick={(e) => { const inp = e.currentTarget.querySelector('input'); inp?.focus() }}
+      >
+        {value.map((w, i) => (
+          <span key={i} className="inline-flex items-center gap-1 px-3 py-1 bg-brand-100 text-brand-800 rounded-full text-sm font-medium">
+            {w}
+            {!disabled && (
+              <button onClick={(e) => { e.stopPropagation(); onChange(value.filter((_, j) => j !== i)) }} className="text-brand-500 hover:text-red-500 font-bold">&times;</button>
+            )}
+          </span>
+        ))}
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); add() }
+            if (e.key === 'Backspace' && !input && value.length > 0) onChange(value.slice(0, -1))
+          }}
           disabled={disabled || value.length >= 5}
           maxLength={30}
-          placeholder="Un mot..."
-          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-50"
+          placeholder={value.length === 0 ? 'Tapez un mot, Entrée pour ajouter...' : ''}
+          className="flex-1 min-w-[120px] px-1 py-1 outline-none bg-transparent text-sm disabled:cursor-not-allowed"
         />
-        <button onClick={add} disabled={disabled || !input.trim() || value.length >= 5} className="px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">+</button>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {value.map((w, i) => (
-          <span key={i} className="inline-flex items-center gap-1 px-3 py-1 bg-brand-100 text-brand-800 rounded-full text-sm">
-            {w}
-            {!disabled && <button onClick={() => onChange(value.filter((_, j) => j !== i))} className="text-brand-600 hover:text-brand-800">&times;</button>}
-          </span>
-        ))}
-      </div>
-      <p className="text-xs text-gray-400 mt-1">{value.length}/5 mots</p>
+      <p className="text-xs text-gray-400 mt-1">{value.length}/5 mots — Entrée ou virgule pour valider</p>
     </div>
   )
 }
 
-// ── Échelle 1-5 (L) ───────────────────────────────────────────────────────
+// ── Échelle 1-5 (L) — avec labels ─────────────────────────────────────────
+
+const L_ECHELLE_LABELS = ['Pas du tout', 'Plutôt non', 'Neutre', 'Plutôt oui', 'Tout à fait']
 
 export function EchelleInput({ value, onChange, disabled }: {
   value: number | null
@@ -201,19 +222,26 @@ export function EchelleInput({ value, onChange, disabled }: {
   disabled?: boolean
 }) {
   return (
-    <div className="flex gap-2 justify-center">
-      {[1, 2, 3, 4, 5].map((n) => (
-        <button
-          key={n}
-          onClick={() => !disabled && onChange(n)}
-          disabled={disabled}
-          className={`w-14 h-14 rounded-full font-bold text-xl transition-all ${
-            value === n ? 'bg-brand-600 text-white scale-110' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          } disabled:opacity-50`}
-        >
-          {n}
-        </button>
-      ))}
+    <div>
+      <div className="flex gap-2 justify-center">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button
+            key={n}
+            onClick={() => !disabled && onChange(n)}
+            disabled={disabled}
+            className={`w-14 h-14 rounded-full font-bold text-xl transition-all ${
+              value === n ? 'bg-brand-600 text-white scale-110 shadow-lg' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+            } disabled:opacity-50`}
+          >
+            {n}
+          </button>
+        ))}
+      </div>
+      <div className="flex justify-between mt-2 text-xs text-gray-500 px-1">
+        <span>{L_ECHELLE_LABELS[0]}</span>
+        <span className="font-medium text-brand-600">{value ? L_ECHELLE_LABELS[value - 1] : ''}</span>
+        <span>{L_ECHELLE_LABELS[4]}</span>
+      </div>
     </div>
   )
 }
