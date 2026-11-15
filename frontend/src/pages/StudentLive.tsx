@@ -170,9 +170,13 @@ export default function StudentLivePage() {
               answer={answer}
               onChange={setAnswer}
               disabled={submitted || current.locked || current.time_expired}
+              content={current.content}
             />
             <div className="mt-4 flex gap-2">
-              <Button onClick={handleSubmit} disabled={submitting || submitted || Object.keys(answer).length === 0}>
+              <Button
+                onClick={handleSubmit}
+                disabled={submitting || submitted || !isAnswerComplete(current.slide_type, answer, current.content)}
+              >
                 {submitting ? <Spinner size="sm" /> : submitted ? 'Réponse envoyée' : 'Valider ma réponse'}
               </Button>
               {submitted && <Badge color="green">Verrouillée</Badge>}
@@ -230,4 +234,29 @@ function Countdown({ expiresAt }: { expiresAt: string }) {
     return () => clearInterval(i)
   }, [expiresAt])
   return <Badge color="yellow">⏱ {left}</Badge>
+}
+
+// Vérifie qu'une réponse est complète avant validation
+function isAnswerComplete(type: string, answer: Record<string, unknown>, content?: string): boolean {
+  switch (type) {
+    case 'T': {
+      // Tous les trous (___) du contenu doivent être remplis
+      const nbTrous = content ? (content.match(/_{2,}/g) || []).length : 0
+      const blanks = (answer.blanks as string[]) || []
+      return blanks.length >= nbTrous && blanks.every((b) => b && b.trim())
+    }
+    case 'Q':
+    case 'P':
+      return Array.isArray(answer.selected) && answer.selected.length > 0
+    case 'F':
+      return typeof answer.text === 'string' && answer.text.trim().length > 0
+    case 'N':
+      return Array.isArray(answer.words) && answer.words.length > 0
+    case 'L':
+      return typeof answer.value === 'number'
+    case 'I':
+      return typeof answer.x === 'number' && typeof answer.y === 'number'
+    default:
+      return Object.keys(answer).length > 0
+  }
 }

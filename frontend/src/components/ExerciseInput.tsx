@@ -211,61 +211,92 @@ export function PinImageInput({
 }
 
 // ── Texte à trous (T) ─────────────────────────────────────────────────────
+// Parse le contenu Markdown, trouve les trous (___ ou ____ etc.) et affiche
+// le texte avec un champ input inline à la place de chaque trou.
+
+const TROU_RE = /_{2,}/g
 
 export function TexteTrousInput({
-  value, onChange, disabled,
+  content, value, onChange, disabled,
 }: {
+  content: string
   value: string[]
   onChange: (v: string[]) => void
   disabled?: boolean
 }) {
-  const [input, setInput] = useState('')
-  const add = () => {
-    const w = input.trim()
-    if (w) {
-      onChange([...value, w])
-      setInput('')
-    }
+  // Découpe le contenu autour des trous
+  const parts = content.split(TROU_RE)
+  const nbTrous = parts.length - 1
+
+  const setTrou = (i: number, val: string) => {
+    const next = [...value]
+    next[i] = val
+    onChange(next)
   }
+
+  // Rendu simple : on affiche le texte ligne par ligne, les trous deviennent des inputs
   return (
-    <div>
-      <div className="flex gap-2 mb-2">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }}
-          disabled={disabled}
-          placeholder="Mot manquant..."
-          className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:bg-gray-50"
-        />
-        <button onClick={add} disabled={disabled || !input.trim()} className="px-4 py-2 bg-brand-600 text-white rounded-lg hover:bg-brand-700 disabled:opacity-50">
-          +
-        </button>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {value.map((w, i) => (
-          <span key={i} className="inline-flex items-center gap-1 px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-sm">
-            {w}
-            {!disabled && (
-              <button onClick={() => onChange(value.filter((_, j) => j !== i))} className="text-yellow-600 hover:text-yellow-800">&times;</button>
-            )}
-          </span>
-        ))}
-      </div>
+    <div className="space-y-3 text-gray-800 leading-relaxed">
+      {parts.map((part, i) => (
+        <span key={i}>
+          {/* Rendu minimal du markdown inline : gras, code, sauts de ligne */}
+          <InlineMarkdown text={part} />
+          {i < nbTrous && (
+            <input
+              type="text"
+              value={value[i] || ''}
+              onChange={(e) => setTrou(i, e.target.value)}
+              disabled={disabled}
+              placeholder={`mot ${i + 1}`}
+              className="inline-block mx-1 px-2 py-1 border-b-2 border-brand-500 bg-brand-50 rounded focus:outline-none focus:border-brand-700 disabled:bg-gray-100 text-center"
+              style={{ width: `${Math.max(6, (value[i] || '').length + 4)}ch`, minWidth: '6ch' }}
+            />
+          )}
+        </span>
+      ))}
     </div>
   )
+}
+
+// Rendu minimal inline : **gras**, `code`, # titres, - listes, sauts de ligne
+function InlineMarkdown({ text }: { text: string }) {
+  // Découpe en lignes pour gérer les titres/listes
+  const lines = text.split('\n')
+  return (
+    <>
+      {lines.map((line, li) => (
+        <span key={li}>
+          {li > 0 && <br />}
+          {renderInline(line)}
+        </span>
+      ))}
+    </>
+  )
+}
+
+function renderInline(line: string): React.ReactNode {
+  // Sépare le markdown inline : **gras**, `code`
+  const tokens = line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
+  return tokens.map((tok, i) => {
+    if (tok.startsWith('**') && tok.endsWith('**')) return <strong key={i}>{tok.slice(2, -2)}</strong>
+    if (tok.startsWith('`') && tok.endsWith('`')) return <code key={i} className="bg-gray-100 px-1 rounded font-mono text-sm">{tok.slice(1, -1)}</code>
+    // Titres
+    if (tok.startsWith('#')) return <strong key={i} className="text-lg">{tok.replace(/^#+\s*/, '')}</strong>
+    return <span key={i}>{tok}</span>
+  })
 }
 
 // ── Sélecteur d'exercice générique ────────────────────────────────────────
 
 export function ExerciseInput({
-  type, answer, onChange, disabled, imageUrl,
+  type, answer, onChange, disabled, imageUrl, content,
 }: {
   type: SlideType
   answer: Record<string, unknown>
   onChange: (a: Record<string, unknown>) => void
   disabled?: boolean
   imageUrl?: string
+  content?: string
 }) {
   switch (type) {
     case 'Q':
@@ -281,7 +312,7 @@ export function ExerciseInput({
     case 'I':
       return <PinImageInput value={(answer.x !== undefined ? { x: answer.x as number, y: answer.y as number } : null)} onChange={(v) => onChange({ x: v.x, y: v.y })} imageUrl={imageUrl || ''} disabled={disabled} />
     case 'T':
-      return <TexteTrousInput value={(answer.blanks as string[]) || []} onChange={(v) => onChange({ blanks: v })} disabled={disabled} />
+      return <TexteTrousInput content={content || ''} value={(answer.blanks as string[]) || []} onChange={(v) => onChange({ blanks: v })} disabled={disabled} />
     case 'A':
     case 'O':
     case 'R':
