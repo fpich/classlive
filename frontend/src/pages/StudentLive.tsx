@@ -49,6 +49,14 @@ export default function StudentLivePage() {
     return () => { clearInterval(interval); disconnect() }
   }, [session.token])
 
+  // Blocage global silencieux du copier-coller sur la vue Live étudiant
+  useEffect(() => {
+    const block = (e: Event) => e.preventDefault()
+    const events: (keyof DocumentEventMap)[] = ['copy', 'cut', 'paste', 'contextmenu', 'dragstart']
+    events.forEach((ev) => document.addEventListener(ev, block))
+    return () => events.forEach((ev) => document.removeEventListener(ev, block))
+  }, [])
+
   // Reset answer quand la slide change
   useEffect(() => {
     setAnswer({})
