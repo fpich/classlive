@@ -111,96 +111,79 @@ export default function StudentLivePage() {
   const showCorrection = current.correction !== undefined && (current.correction_visible || (isAutonome && current.correction !== undefined))
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center gap-3 flex-wrap sticky top-0 z-10">
-        <h1 className="font-bold text-brand-600">ClassLive</h1>
-        <span className="text-sm text-gray-600">{session.prenom} {session.nom}</span>
-        <Badge color="blue">{current.online} en ligne</Badge>
-        <div className="flex-1" />
+    <div className="student-live">
+      {/* Slide plein écran */}
+      <div className={`student-slide ${current.orientation === 'portrait' ? 'student-slide-portrait' : ''}`}>
+        <Markdown content={current.content} />
+      </div>
+
+      {/* Bandeau haut : infos + réactions */}
+      <div className="student-topbar">
+        <span className="student-chip">{current.position}/{current.total}</span>
         {current.announcement && (
-          <span className="text-sm bg-yellow-100 text-yellow-800 px-2 py-1 rounded">📢 {current.announcement}</span>
+          <span className="student-chip student-announcement">📢 {current.announcement}</span>
         )}
+        {current.expires_at && !current.time_expired && <Countdown expiresAt={current.expires_at} />}
+        {current.time_expired && <span className="student-chip student-timeout">Temps écoulé</span>}
+        <div className="flex-1" />
         {current.reactions_enabled && (
           <div className="flex gap-1">
             {EMOJIS.map((e) => (
-              <button key={e} onClick={() => handleReaction(e)} className="text-xl hover:scale-125 transition-transform">{e}</button>
+              <button key={e} onClick={() => handleReaction(e)} className="student-emoji">{e}</button>
             ))}
           </div>
         )}
-      </header>
+      </div>
 
-      {error && <div className="mx-4 mt-2 p-2 bg-red-50 text-red-700 rounded text-sm flex justify-between">{error}<button onClick={() => setError('')}>&times;</button></div>}
+      {error && <div className="student-error">{error}<button onClick={() => setError('')}>&times;</button></div>}
 
-      <main className="max-w-3xl mx-auto p-4">
-        {/* Progression */}
-        <div className="flex items-center gap-2 mb-4 text-sm text-gray-500">
-          <span>Slide {current.position}/{current.total}</span>
-          <div className="flex-1 bg-gray-200 rounded-full h-2">
-            <div className="bg-brand-500 h-full rounded-full transition-all" style={{ width: `${(current.position / current.total) * 100}%` }} />
-          </div>
-          {isAutonome && current.finished && <Badge color="green">Terminé</Badge>}
-        </div>
-
-        {/* Slide */}
-        <Card className="mb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Badge color={isEx ? 'blue' : 'gray'}>{exerciseTypeLabel(current.slide_type)}</Badge>
-            <span className="font-medium">{current.slide}</span>
-            {current.expires_at && !current.time_expired && (
-              <Countdown expiresAt={current.expires_at} />
-            )}
-            {current.time_expired && <Badge color="red">Temps écoulé</Badge>}
-          </div>
-          <div className={`slide-landscape ${current.orientation === 'portrait' ? 'slide-portrait' : ''}`}>
-            <Markdown content={current.content} />
-          </div>
-
-          {/* Correction */}
-          {showCorrection && current.correction !== undefined && (
-            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <strong className="text-green-800">Corrigé :</strong>
-              <pre className="mt-1 text-sm text-green-700 whitespace-pre-wrap">{JSON.stringify(current.correction, null, 2)}</pre>
-            </div>
-          )}
-        </Card>
-
-        {/* Exercice */}
-        {isEx && !current.finished && (
-          <Card className="mb-4">
-            <h3 className="font-medium mb-3">Votre réponse</h3>
-            <ExerciseInput
-              type={current.slide_type as never}
-              answer={answer}
-              onChange={setAnswer}
-              disabled={submitted || current.locked || current.time_expired}
-              content={current.content}
-            />
-            <div className="mt-4 flex gap-2">
+      {/* Zone de réponse (exercices) */}
+      {isEx && !current.finished && (
+        <div className="student-answer">
+          <div className="student-answer-head">
+            <span className="font-medium">{exerciseTypeLabel(current.slide_type)} — Votre réponse</span>
+            <div className="flex gap-2 items-center">
+              {submitted && <Badge color="green">Verrouillée</Badge>}
               <Button
+                size="sm"
                 onClick={handleSubmit}
                 disabled={submitting || submitted || !isAnswerComplete(current.slide_type, answer, current.content)}
               >
-                {submitting ? <Spinner size="sm" /> : submitted ? 'Réponse envoyée' : 'Valider ma réponse'}
+                {submitting ? <Spinner size="sm" /> : submitted ? 'Réponse envoyée' : 'Valider'}
               </Button>
-              {submitted && <Badge color="green">Verrouillée</Badge>}
             </div>
-          </Card>
-        )}
-
-        {/* Navigation autonome */}
-        {isAutonome && (
-          <div className="flex gap-2 mb-4">
-            <Button variant="secondary" onClick={handlePrevious} disabled={current.position <= 1}>&larr; Précédent</Button>
-            <Button onClick={handleNext} disabled={current.finished || (isEx && !submitted && !current.locked)}>
-              Suivant &rarr;
-            </Button>
           </div>
-        )}
+          <ExerciseInput
+            type={current.slide_type as never}
+            answer={answer}
+            onChange={setAnswer}
+            disabled={submitted || current.locked || current.time_expired}
+            content={current.content}
+          />
+        </div>
+      )}
 
-        {/* Q&A */}
-        {current.questions_enabled && (
-        <Card>
+      {/* Correction */}
+      {showCorrection && current.correction !== undefined && (
+        <div className="student-correction">
+          <strong className="text-green-800">Corrigé :</strong>
+          <pre className="mt-1 text-sm text-green-700 whitespace-pre-wrap">{JSON.stringify(current.correction, null, 2)}</pre>
+        </div>
+      )}
+
+      {/* Navigation autonome */}
+      {isAutonome && (
+        <div className="student-nav">
+          <Button variant="secondary" size="sm" onClick={handlePrevious} disabled={current.position <= 1}>&larr; Précédent</Button>
+          <Button size="sm" onClick={handleNext} disabled={current.finished || (isEx && !submitted && !current.locked)}>
+            Suivant &rarr;
+          </Button>
+        </div>
+      )}
+
+      {/* Q&A */}
+      {current.questions_enabled && (
+        <div className="student-qa">
           <button onClick={() => setShowQA(!showQA)} className="flex items-center justify-between w-full text-left">
             <span className="font-medium">Questions ({myQuestions.length})</span>
             <span>{showQA ? '▲' : '▼'}</span>
@@ -219,9 +202,8 @@ export default function StudentLivePage() {
               ))}
             </div>
           )}
-        </Card>
-        )}
-      </main>
+        </div>
+      )}
     </div>
   )
 }

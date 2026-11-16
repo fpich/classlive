@@ -385,3 +385,154 @@
 .slide-content .callout[data-callout="consigne"] .callout-title { color: #a16207 !important; }
 /* ===== FIN RÈGLES DE COULEUR ===== */
 /* ===== FIN POLICY TYPO ===== */
+
+/* ===== VUE ÉTUDIANT PLEIN ÉCRAN (StudentLive) =====
+   La slide occupe tout l'écran ; la zone de réponse, la correction, la
+   navigation et la Q&A s'affichent en overlay (bas / haut). */
+.student-live {
+  position: fixed;
+  inset: 0;
+  background: #ffffff !important;
+  overflow: hidden;
+}
+/* Slide plein écran : défilement vertical si le contenu dépasse. */
+.student-slide {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  background: #ffffff !important;
+  padding: 24px 40px 120px 40px !important;
+}
+.student-slide .slide-content {
+  width: 100%;
+  max-width: none;
+}
+/* Portrait : contenu centré dans une colonne étroite. */
+.student-slide-portrait .slide-content {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Bandeau haut : infos + réactions, semi-transparent, au-dessus de la slide. */
+.student-topbar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid #e2e8f0;
+  backdrop-filter: blur(4px);
+}
+.student-chip {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  background: #f1f5f9;
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+.student-announcement {
+  background: #fef9c3;
+  color: #a16207;
+}
+.student-timeout {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.student-emoji {
+  font-size: 22px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: transform 0.1s ease;
+}
+.student-emoji:hover { transform: scale(1.25); }
+
+/* Erreur : bandeau en haut, sous la topbar. */
+.student-error {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  background: #fee2e2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+/* Zone de réponse : panneau en bas, au-dessus de la slide. */
+.student-answer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  background: #ffffff;
+  border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -4px 16px rgba(15, 23, 42, 0.08);
+  padding: 12px 20px 16px 20px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.student-answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* Correction : panneau en bas. */
+.student-correction {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 24;
+  background: #f0fdf4;
+  border-top: 1px solid #bbf7d0;
+  padding: 12px 20px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+/* Navigation autonome : en bas à droite. */
+.student-nav {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 26;
+  display: flex;
+  gap: 8px;
+}
+
+/* Q&A : panneau en bas à gauche. */
+.student-qa {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 26;
+  width: 320px;
+  max-width: 90vw;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.12);
+  padding: 10px 14px;
+  max-height: 50vh;
+  overflow-y: auto;
+}

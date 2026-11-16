@@ -6,6 +6,21 @@ import { Button, Card, Input, Modal, Spinner, Badge } from '@/components/UI'
 import Markdown from '@/components/Markdown'
 import { SLIDE_TYPE_LABELS, type SlideType } from '@/types/api'
 
+// Modèles de contenu pré-remplis à la création d'une slide exercice.
+const SLIDE_TEMPLATES: Record<SlideType, string> = {
+  C: '# Titre\n\nContenu de la slide…',
+  Q: '# Question\n\n- A) Première proposition\n- B) Deuxième proposition\n- C) Troisième proposition\n- D) Quatrième proposition',
+  P: '# Sondage\n\n- A) Première option\n- B) Deuxième option\n- C) Troisième option',
+  A: '# Association\n\n- Terme de gauche => terme de droite\n- Autre terme => autre définition',
+  O: '# Mettre dans l\'ordre\n\n- Premier élément\n- Deuxième élément\n- Troisième élément',
+  R: '# Classer dans les catégories\n\n**Catégorie 1**\n**Catégorie 2**\n\n- Élément à classer\n- Autre élément',
+  T: '# Texte à trous\n\nComplétez la phrase avec le mot manquant : ____.',
+  F: '# Texte libre\n\nRédigez votre réponse ici.',
+  N: '# Nuage de mots\n\nDonnez jusqu\'à 5 mots-clés.',
+  L: '# Échelle\n\nIndiquez votre niveau de 1 à 5.',
+  I: '# Pin sur image\n\n![image](url)',
+}
+
 export default function EditorPage() {
   const { group = '', event = '' } = useParams()
   const navigate = useNavigate()
@@ -64,7 +79,7 @@ export default function EditorPage() {
   const createSlide = async () => {
     if (!newTitle.trim()) return
     try {
-      const res = await api.createSlide(group, event, { title: newTitle.trim(), slide_type: newType, content: '' })
+      const res = await api.createSlide(group, event, { title: newTitle.trim(), slide_type: newType, content: SLIDE_TEMPLATES[newType] })
       setNewTitle('')
       setShowNew(false)
       load()
