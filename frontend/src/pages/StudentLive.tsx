@@ -150,7 +150,9 @@ export default function StudentLivePage() {
             )}
             {current.time_expired && <Badge color="red">Temps écoulé</Badge>}
           </div>
-          <Markdown content={current.content} />
+          <div className="slide-landscape">
+            <Markdown content={current.content} />
+          </div>
 
           {/* Correction */}
           {showCorrection && current.correction !== undefined && (

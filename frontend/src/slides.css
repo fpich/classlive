@@ -8,6 +8,25 @@
      Markdown.tsx avec la classe data-callout="type".
    ===================================================================== */
 
+/* ===== FORMAT PAYSAGE DES SLIDES (vue Live) =====
+   La slide est affichée dans un cadre large (ratio 16/9), centré, avec
+   défilement vertical si le contenu dépasse la hauteur du cadre. */
+.slide-landscape {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  max-height: 78vh;
+  overflow-y: auto;
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
+  padding: 24px 32px !important;
+}
+.slide-landscape .slide-content {
+  width: 100%;
+  max-width: none;
+}
+
 /* ===== FILET DE SÉCURITÉ — sélecteurs universels ===== */
 .slide-content {
   font-family: "Andika", Verdana, "DejaVu Sans", sans-serif !important;
