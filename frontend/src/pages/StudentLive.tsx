@@ -112,9 +112,12 @@ export default function StudentLivePage() {
 
   return (
     <div className="student-live">
-      {/* Slide plein écran */}
+      {/* Slide plein écran — le contenu markdown n'est affiché que pour les
+          slides de contenu (C). Pour un exercice, le contenu markdown EST la
+          définition de l'exercice (déjà rendue de façon interactive ci-dessous) :
+          l'afficher serait redondant et révélerait la réponse. */}
       <div className={`student-slide ${current.orientation === 'portrait' ? 'student-slide-portrait' : ''}`}>
-        <Markdown content={current.content} />
+        {!isEx && <Markdown content={current.content} />}
       </div>
 
       {/* Bandeau haut : infos + réactions */}

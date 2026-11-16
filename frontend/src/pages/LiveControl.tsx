@@ -7,6 +7,7 @@ import { api } from '@/api/client'
 import { useTrainerAuth, useLiveMonitor } from '@/store'
 import { Button, Card, Badge, Spinner, Input } from '@/components/UI'
 import Markdown from '@/components/Markdown'
+import { ExerciseInput } from '@/components/ExerciseInput'
 import { StatsBars } from '@/components/Stats'
 import { isExercise, type LiveState, type StudentsResponse, type StatsResponse, type QuestionsResponse, type ReactionsResponse } from '@/types/api'
 import { usePublicUrl, buildJoinUrl } from '@/hooks/usePublicUrl'
@@ -147,7 +148,17 @@ export default function LiveControlPage() {
                 <span className="text-sm text-gray-400">Slide {state.position}/{state.total}</span>
               </div>
               <div className="slide-content flex-1 min-h-0">
-                <Markdown content={state.content || ''} />
+                {isEx ? (
+                  <ExerciseInput
+                    type={currentType as never}
+                    answer={{}}
+                    onChange={() => {}}
+                    disabled
+                    content={state.content || ''}
+                  />
+                ) : (
+                  <Markdown content={state.content || ''} />
+                )}
               </div>
               {state.correction_visible && state.correction !== undefined && (
                 <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg shrink-0">
