@@ -80,6 +80,10 @@ export default function LiveControlPage() {
     try { await api.announce(liveId, announceText.trim()); setAnnounceText('') } catch (err) { setError(err instanceof Error ? err.message : 'Erreur') }
   }
 
+  const handleOrientation = async (orientation: 'paysage' | 'portrait') => {
+    try { setState(await api.setOrientation(liveId, orientation)) } catch (err) { setError(err instanceof Error ? err.message : 'Erreur') }
+  }
+
   const handleAnswer = async (qid: number) => {
     if (!answerText.trim()) return
     try {
@@ -277,6 +281,14 @@ export default function LiveControlPage() {
                 Masquer le corrigé
               </Button>
             )}
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={() => handleOrientation('paysage')} className={`flex-1 ${state.orientation === 'paysage' ? '!bg-brand-600 !text-white' : ''}`}>
+                Paysage
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => handleOrientation('portrait')} className={`flex-1 ${state.orientation === 'portrait' ? '!bg-brand-600 !text-white' : ''}`}>
+                Portrait
+              </Button>
+            </div>
             <div className="flex gap-2">
               <Input value={announceText} onChange={setAnnounceText} placeholder="Annonce..." className="flex-1 !bg-gray-700 !border-gray-600 !text-white text-sm" maxLength={500} />
               <Button size="sm" onClick={handleAnnounce} disabled={!announceText.trim()}>OK</Button>

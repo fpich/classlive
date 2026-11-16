@@ -39,6 +39,7 @@ PUBLIC_ROUTES = {
     ('GET', '/api/v1/live/{live_id}/status'),
     ('POST', '/api/v1/live/{live_id}/correction/show'),
     ('POST', '/api/v1/live/{live_id}/correction/hide'),
+    ('POST', '/api/v1/live/{live_id}/orientation'),
     ('POST', '/api/v1/live/{live_id}/stop'),
     ('GET', '/api/v1/live/{live_id}/students'),
     ('GET', '/api/v1/live/{live_id}/results'),
@@ -52,6 +53,7 @@ PUBLIC_ROUTES = {
     ('GET', '/api/v1/groups/{group}/events/{event}/student-results'),
     ('DELETE', '/api/v1/live/{live_id}'),
     ('GET', '/api/v1/help'),
+    ('GET', '/api/v1/public-url'),
     ('GET', '/health'),
     ('POST', '/api/v1/groups'),
     ('GET', '/api/v1/groups'),
@@ -106,6 +108,7 @@ PUBLIC_ENDPOINTS = {
     ('POST', '/api/v1/auth/login'), ('POST', '/api/v1/auth/change-password'),
     ('POST', '/api/v1/student/join'),
     ('GET', '/api/v1/help'), ('GET', '/health'),
+    ('GET', '/api/v1/public-url'),
     ('GET', '/media/{group}/{event}/{filename}'),
 }
 STUDENT_ENDPOINTS = {

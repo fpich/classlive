@@ -135,6 +135,8 @@ export const api = {
     req<{ success: boolean }>(`/live/${liveId}/questions/${qid}/toggle`, { method: 'POST' }),
   announce: (liveId: string, text: string) =>
     req<{ success: boolean }>(`/live/${liveId}/announce`, { method: 'POST', body: JSON.stringify({ text }) }),
+  setOrientation: (liveId: string, orientation: 'paysage' | 'portrait') =>
+    req<LiveState>(`/live/${liveId}/orientation`, { method: 'POST', body: JSON.stringify({ orientation }) }),
   kickStudent: (liveId: string, pid: string) =>
     req<{ kicked: boolean }>(`/live/${liveId}/students/${pid}`, { method: 'DELETE' }),
   activeLives: () => req<ActiveLivesResponse>('/live/active'),

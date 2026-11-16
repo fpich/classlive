@@ -139,6 +139,7 @@ class LiveStore:
                 ('deadline', "TEXT"),
                 ('announcement', "TEXT"),
                 ('anonymous', "INTEGER NOT NULL DEFAULT 0"),
+                ('orientation', "TEXT NOT NULL DEFAULT 'paysage'"),
             ):
                 if col not in columns:
                     con.execute(f'ALTER TABLE live_sessions ADD COLUMN {col} {ddl}')
@@ -262,6 +263,7 @@ class LiveStore:
                       'timing': session['timing'], 'timing_seconds': session['timing_seconds'],
                       'correction_mode': session['correction_mode'], 'deadline': session['deadline'],
                       'announcement': session['announcement'], 'anonymous': bool(session['anonymous']),
+                      'orientation': session['orientation'],
                       'correction_visible': bool(session['correction_visible']) if current['kind'] in EXERCISES else False}
             if include_content:
                 result['content'] = current['public_content']
@@ -294,6 +296,16 @@ class LiveStore:
                             (target, new_deadline, lid))
             else:
                 con.execute('UPDATE live_sessions SET current_number=?,correction_visible=0,revision=revision+1 WHERE id=?', (target,lid))
+        return self.state(lid, include_content=True)
+
+    def orientation(self, lid: str, orientation: str):
+        """Bascule l'orientation d'affichage des slides (paysage/portrait), diffusée à tous."""
+        if orientation not in ('paysage', 'portrait'):
+            raise ValueError("orientation doit être 'paysage' ou 'portrait'.")
+        with self.lock, self.db() as con:
+            self._live(con, lid)
+            con.execute('UPDATE live_sessions SET orientation=?, revision=revision+1 WHERE id=?', (orientation, lid))
+        self.audit('formateur', 'orientation', f'live_id={lid} {orientation}')
         return self.state(lid, include_content=True)
 
     def announce(self, lid: str, text: str):
@@ -460,6 +472,7 @@ class LiveStore:
                       'slide': snap['filename'], 'slide_type': snap['kind'], 'number': number,
                       'position': i + 1, 'total': len(numbers), 'revision': live['revision'],
                       'online': online, 'announcement': live['announcement'],
+                      'orientation': live['orientation'],
                       'content': snap['public_content'], 'finished': bool(finished)}
             if live['mode'] == 'autonome':
                 result['locked'] = locked

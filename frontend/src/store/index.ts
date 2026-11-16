@@ -150,6 +150,9 @@ export const useStudentLive = create<StudentLive>((set, get) => ({
       case 'correction_hidden':
         set({ current: event.current as unknown as StudentState })
         break
+      case 'orientation_changed':
+        set({ current: event.current as unknown as StudentState })
+        break
       case 'live_ended':
       case 'session_ended':
         set({ current: { ...get().current!, status: 'ended' } })

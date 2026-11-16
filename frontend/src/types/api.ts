@@ -129,6 +129,7 @@ export interface LiveState {
   deadline: string | null
   announcement: string | null
   anonymous: boolean
+  orientation: 'paysage' | 'portrait'
   correction_visible: boolean
   content?: string
   correction?: unknown
@@ -148,6 +149,7 @@ export interface StudentState {
   revision: number
   online: number
   announcement: string | null
+  orientation: 'paysage' | 'portrait'
   content: string
   finished: boolean
   locked?: boolean
@@ -342,6 +344,7 @@ export type WSEvent =
   | { event: 'question_updated'; question_id: number; answered: boolean }
   | { event: 'reaction'; participation_id: string; emoji: string; counts: Record<string, number> }
   | { event: 'announcement'; text: string }
+  | { event: 'orientation_changed'; current: LiveState }
   | { event: 'monitor'; students: StudentsResponse; current: LiveState }
   | { event: 'pong' }
   | { event: 'error'; detail: string }

@@ -39,6 +39,10 @@ class TextPayload(BaseModel):
     text: str
 
 
+class OrientationPayload(BaseModel):
+    orientation: str
+
+
 class Jump(BaseModel):
     number: int = Field(ge=1, le=999999, strict=True)
 
@@ -470,6 +474,15 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
             raise HTTPException(status_code=422,detail=str(exc)) from exc
         await hub.publish(live_id,{'event':'announcement','text':result['text']})
         return {'success':True,**result}
+
+    @trainer_routes.post('/live/{live_id}/orientation',tags=['Live formateur'])
+    async def set_orientation(live_id: str, payload: OrientationPayload):
+        try:
+            result=store.orientation(live_id,payload.orientation)
+        except ValueError as exc:
+            raise HTTPException(status_code=422,detail=str(exc)) from exc
+        await hub.publish(live_id,{'event':'orientation_changed','current':result})
+        return result
 
     # ── Exports CSV complémentaires ────────────────────────────────────────
 

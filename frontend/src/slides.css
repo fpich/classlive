@@ -26,6 +26,13 @@
   width: 100%;
   max-width: none;
 }
+/* Format portrait : cadre étroit (ratio 3/4), centré, défilement vertical. */
+.slide-landscape.slide-portrait {
+  aspect-ratio: 3 / 4;
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
 
 /* ===== FILET DE SÉCURITÉ — sélecteurs universels ===== */
 .slide-content {

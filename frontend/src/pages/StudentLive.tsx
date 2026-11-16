@@ -150,7 +150,7 @@ export default function StudentLivePage() {
             )}
             {current.time_expired && <Badge color="red">Temps écoulé</Badge>}
           </div>
-          <div className="slide-landscape">
+          <div className={`slide-landscape ${current.orientation === 'portrait' ? 'slide-portrait' : ''}`}>
             <Markdown content={current.content} />
           </div>
 
