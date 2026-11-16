@@ -465,7 +465,7 @@ class LiveStore:
             slides = con.execute('SELECT number FROM snapshots WHERE live_id=? ORDER BY number', (live['id'],)).fetchall()
             numbers = [s['number'] for s in slides]
             i = numbers.index(number)
-            locked = self._slide_locked(con, student['id'], number) if live['mode'] == 'autonome' else False
+            locked = self._slide_locked(con, student['id'], number)
             if self.online_counter is not None:
                 online = self.online_counter(live['id'])
             else:
@@ -479,9 +479,9 @@ class LiveStore:
                       'online': online, 'announcement': live['announcement'],
                       'orientation': live['orientation'],
                       'reactions_enabled': bool(live['reactions_enabled']), 'questions_enabled': bool(live['questions_enabled']),
-                      'content': snap['public_content'], 'finished': bool(finished)}
+                      'content': snap['public_content'], 'finished': bool(finished),
+                      'locked': locked}
             if live['mode'] == 'autonome':
-                result['locked'] = locked
                 # Timer par question : démarre au premier affichage de la slide.
                 if live['timing'] == 'par_question' and snap['kind'] in EXERCISES and not finished:
                     timer = con.execute('SELECT started_at FROM question_timers WHERE participation_id=? AND slide_number=?',
@@ -644,9 +644,9 @@ class LiveStore:
                 raise ResourceConflict('Les réponses sont fermées pendant l’affichage de la correction.')
             if live['timing'] == 'par_question' and live['deadline'] and time.time() > datetime.fromisoformat(live['deadline']).timestamp():
                 raise ResourceConflict('Temps écoulé pour cette question.')
+            if self._slide_locked(con, student['id'], snap['number']):
+                raise ResourceConflict('Réponse déjà verrouillée pour cette slide.')
             if live['mode'] == 'autonome':
-                if self._slide_locked(con, student['id'], snap['number']):
-                    raise ResourceConflict('Réponse déjà verrouillée pour cette slide.')
                 if live['timing'] == 'par_question':
                     timer = con.execute('SELECT started_at FROM question_timers WHERE participation_id=? AND slide_number=?',
                                         (student['id'], snap['number'])).fetchone()
@@ -662,12 +662,11 @@ class LiveStore:
             stamp = now()
             con.execute('INSERT INTO submissions(participation_id,slide_number,answer_json,submitted_at) VALUES (?,?,?,?)',
                         (student['id'],snap['number'],data,stamp))
-            if live['mode'] == 'autonome':
-                con.execute('INSERT INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?) '
-                            'ON CONFLICT(participation_id,slide_number) DO UPDATE SET reason=excluded.reason, locked_at=excluded.locked_at',
-                            (student['id'], snap['number'], stamp, 'answered'))
+            con.execute('INSERT INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?) '
+                        'ON CONFLICT(participation_id,slide_number) DO UPDATE SET reason=excluded.reason, locked_at=excluded.locked_at',
+                        (student['id'], snap['number'], stamp, 'answered'))
             con.execute('UPDATE participations SET last_seen=? WHERE id=?', (stamp,student['id']))
-            return {'success': True, 'slide': snap['filename'], 'submitted_at': stamp, 'saved': True, 'locked': live['mode'] == 'autonome'}
+            return {'success': True, 'slide': snap['filename'], 'submitted_at': stamp, 'saved': True, 'locked': True}
 
     def connected(self, lid, pid):
         with self.lock:

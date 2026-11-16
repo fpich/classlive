@@ -136,19 +136,21 @@ export default function LiveControlPage() {
 
       <div className="flex-1 flex overflow-hidden">
         {/* Zone principale (projectable) */}
-        <div className="flex-1 overflow-y-auto p-6 bg-gray-900">
+        <div className="flex-1 overflow-hidden p-6 bg-gray-900">
           {activeTab === 'slide' && (
-            <div className="max-w-3xl mx-auto bg-white rounded-xl p-8 shadow-2xl">
-              <div className="flex items-center justify-between mb-6">
+            <div className={`h-full flex flex-col ${state.orientation === 'portrait' ? 'slide-portrait' : ''} live-slide-full`}>
+              <div className="flex items-center justify-between mb-4 shrink-0">
                 <div className="flex items-center gap-2">
                   <Badge color={isEx ? 'blue' : 'gray'}>{currentType}</Badge>
                   <span className="font-medium">{state.slide}</span>
                 </div>
                 <span className="text-sm text-gray-400">Slide {state.position}/{state.total}</span>
               </div>
-              <Markdown content={state.content || ''} />
+              <div className="slide-content flex-1 min-h-0">
+                <Markdown content={state.content || ''} />
+              </div>
               {state.correction_visible && state.correction !== undefined && (
-                <div className="mt-6 p-4 bg-green-50 border border-green-200 rounded-lg">
+                <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg shrink-0">
                   <strong className="text-green-800">Corrigé :</strong>
                   <pre className="mt-1 text-sm text-green-700 whitespace-pre-wrap">{JSON.stringify(state.correction, null, 2)}</pre>
                 </div>
@@ -157,13 +159,16 @@ export default function LiveControlPage() {
           )}
 
           {activeTab === 'stats' && stats && (
+            <div className="h-full overflow-y-auto">
             <Card className="max-w-2xl mx-auto">
               <h2 className="font-semibold mb-4 text-lg">Réponses — {stats.slide} ({stats.answered}/{stats.total_students})</h2>
               <StatsBars stats={stats} />
             </Card>
+            </div>
           )}
 
           {activeTab === 'students' && students && (
+            <div className="h-full overflow-y-auto">
             <Card className="max-w-2xl mx-auto">
               <div className="flex items-center gap-4 mb-4">
                 <span>Total : <strong>{students.total_students}</strong></span>
@@ -195,9 +200,11 @@ export default function LiveControlPage() {
                 </tbody>
               </table>
             </Card>
+            </div>
           )}
 
           {activeTab === 'qa' && questions && (
+            <div className="h-full overflow-y-auto">
             <Card className="max-w-2xl mx-auto">
               <h2 className="font-semibold mb-4">Questions ({questions.questions.length})</h2>
               {questions.questions.length === 0 ? <p className="text-gray-400 text-sm">Aucune question</p> : (
@@ -226,6 +233,7 @@ export default function LiveControlPage() {
                 </div>
               )}
             </Card>
+            </div>
           )}
         </div>
 

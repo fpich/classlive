@@ -149,12 +149,15 @@ def test_reponse_64kio_limite(client):
     s = client.post('/api/v1/student/join', json={
         'session_code': live['session_code'], 'nom': 'A', 'prenom': 'B'}).json()
     h = {'Authorization': 'Bearer ' + s['student_session_id']}
-    # 64 Ko pile : accepté ; 64 Ko + 1 : rejeté
+    # 64 Ko pile : accepté ; 64 Ko + 1 : rejeté (nouvel étudiant pour ne pas être verrouillé)
     ok = {'answer': {'text': 'x' * 65500}}
     r_ok = client.post('/api/v1/student/answers', headers=h, json=ok)
     assert r_ok.status_code == 200
+    s2 = client.post('/api/v1/student/join', json={
+        'session_code': live['session_code'], 'nom': 'C', 'prenom': 'D'}).json()
+    h2 = {'Authorization': 'Bearer ' + s2['student_session_id']}
     too_big = {'answer': {'text': 'x' * 66000}}
-    r_ko = client.post('/api/v1/student/answers', headers=h, json=too_big)
+    r_ko = client.post('/api/v1/student/answers', headers=h2, json=too_big)
     assert r_ko.status_code == 422
 
 

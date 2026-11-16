@@ -223,13 +223,14 @@ def test_reponse_trop_volumineuse_et_historique_modifications(client, tmp_path):
         json={'answer': {'text': 'A'*70000}}).status_code == 422
     assert client.post('/api/v1/student/answers', headers=h,
         json={'answer': {'selected': ['A']}}).status_code == 200
+    # En mode live, la réponse est verrouillée : une seconde soumission est refusée.
     assert client.post('/api/v1/student/answers', headers=h,
-        json={'answer': {'selected': ['B']}}).status_code == 200
+        json={'answer': {'selected': ['B']}}).status_code == 409
     result = client.get(f'/api/v1/live/{lid}/results').json()['results'][0]
     assert result['answered'] == 1
-    assert result['answers'][0]['answer'] == {'selected': ['B']}
+    assert result['answers'][0]['answer'] == {'selected': ['A']}
     with sqlite3.connect(tmp_path/'classlive.db') as con:
-        assert con.execute('SELECT COUNT(*) FROM submissions').fetchone()[0] == 2
+        assert con.execute('SELECT COUNT(*) FROM submissions').fetchone()[0] == 1
     con.close()
 
 

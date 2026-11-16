@@ -44,7 +44,9 @@ def test_full_lifecycle(client,tmp_path):
     current=student_request(client,tok,'get','/api/v1/student/current').json()
     assert current['slide']=='S002_Q_Question.md' and 'classlive_answer' not in str(current)
     assert student_request(client,tok,'post','/api/v1/student/answers',json={'answer':{'selected':['A']}}).status_code==200
-    assert student_request(client,tok,'post','/api/v1/student/answers',json={'answer':{'selected':['D','B']}}).status_code==200
+    # En mode live, une réponse est verrouillée : une seconde soumission est refusée (même après refresh).
+    assert student_request(client,tok,'post','/api/v1/student/answers',json={'answer':{'selected':['D','B']}}).status_code==409
+    assert student_request(client,tok,'get','/api/v1/student/current').json()['locked'] is True
     assert student_request(client,tok,'post','/api/v1/student/resume').json()['nom']=='Dupont'
     assert client.post(f'/api/v1/live/{lid}/next').status_code==200
     assert student_request(client,tok,'post','/api/v1/student/answers',json={'answer':{'blanks':['Paris']}}).status_code==200

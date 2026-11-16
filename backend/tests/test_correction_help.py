@@ -48,12 +48,13 @@ def test_correction_visibility_and_scores_removed(client):
     assert client.post('/api/v1/student/answers',headers=headers,json={'answer':{'selected':['B']}}).status_code==409
     assert client.post(f'/api/v1/live/{lid}/correction/hide').status_code==200
     assert 'correction' not in client.get('/api/v1/student/current',headers=headers).json()
-    assert client.post('/api/v1/student/answers',headers=headers,json={'answer':{'selected':['B']}}).status_code==200
+    # Réponse verrouillée en mode live : même après masquage de la correction, pas de nouvelle soumission.
+    assert client.post('/api/v1/student/answers',headers=headers,json={'answer':{'selected':['B']}}).status_code==409
     client.post(f'/api/v1/live/{lid}/next')
     assert client.post(f'/api/v1/live/{lid}/correction/show').status_code==409  # Pas de corrigé
     assert not client.get('/api/v1/student/current',headers=headers).json()['correction_visible']
     result=client.get(f'/api/v1/live/{lid}/results').json()['results'][0]
-    assert result['answered']==1 and result['answers'][0]['answer']=={'selected':['B']}
+    assert result['answered']==1 and result['answers'][0]['answer']=={'selected':['A']}
     assert 'points' not in str(result) and 'note' not in str(result)
     out=client.get(f'/api/v1/live/{lid}/export.csv')
     rows=list(csv.DictReader(io.StringIO(out.content.decode('utf-8-sig')),delimiter=';'))

@@ -27,10 +27,12 @@ def test_type_I_creation_et_reponses(client):
     h1, h2 = student_headers(s1), student_headers(s2)
     for h, payload in ((h1, {'x': 0.25, 'y': 0.5}), (h2, {'x': 0.75, 'y': 0.5})):
         assert client.post('/api/v1/student/answers', headers=h, json={'answer': payload}).status_code == 200
-    # formes invalides -> 422
+    # formes invalides -> 422 (étudiant neuf, non verrouillé)
+    s3 = join(client, live['session_code'], 'Trois', 'Eleve')
+    h3 = student_headers(s3)
     for bad in ({}, {'x': 0.5}, {'y': 0.5}, {'x': -0.1, 'y': 0.5}, {'x': 1.5, 'y': 0.5},
                     {'x': 'a', 'y': 0.5}, {'x': True, 'y': 0.5}, {'x': 0.5, 'y': None}):
-        assert client.post('/api/v1/student/answers', headers=h1, json={'answer': bad}).status_code == 422, bad
+        assert client.post('/api/v1/student/answers', headers=h3, json={'answer': bad}).status_code == 422, bad
     # stats : pins + centre de gravité
     st = client.get(f'/api/v1/live/{lid}/stats').json()
     assert st['slide_type'] == 'I' and st['answered'] == 2

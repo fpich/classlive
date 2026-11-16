@@ -34,6 +34,34 @@
   margin-right: auto;
 }
 
+/* ===== SLIDE PLEIN ÉCRAN PAYSAGE (vue Live formateur) =====
+   La slide occupe toute la zone principale disponible (paysage étendu au
+   maximum de la fenêtre), en gardant la colonne de droite (code + QR) et
+   la ligne d'infos en haut. Défilement vertical si le contenu déborde. */
+.live-slide-full {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.08) !important;
+  padding: 24px 32px !important;
+  overflow-y: auto;
+}
+.live-slide-full .slide-content {
+  width: 100%;
+  max-width: none;
+  flex: 1;
+}
+.live-slide-full.slide-portrait {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
 /* ===== FILET DE SÉCURITÉ — sélecteurs universels ===== */
 .slide-content {
   font-family: "Andika", Verdana, "DejaVu Sans", sans-serif !important;

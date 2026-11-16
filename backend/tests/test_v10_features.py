@@ -51,13 +51,20 @@ def test_qcm_validation_selected_durcie(client):
     assert client.post(f'/api/v1/live/{lid}/next').status_code == 200  # -> QCM
     def answer(payload):
         return client.post('/api/v1/student/answers', headers=h, json={'answer': payload})
+    # formes invalides -> 422 (aucune soumission, pas de verrouillage)
     assert answer({'selected': 'A'}).status_code == 422       # pas une liste
     assert answer({'selected': [1]}).status_code == 422       # élément non chaîne
     assert answer({'selected': ['A', 2]}).status_code == 422
+    # une fois une réponse valide soumise, l'étudiant est verrouillé (409)
     assert answer({}).status_code == 200                      # dict vide toléré (rétrocompat)
-    assert answer({'selected': []}).status_code == 200        # liste vide tolérée (rétrocompat)
-    assert answer({'selected': ['A', 'B']}).status_code == 200
-    assert answer({'selected': ['🎉', 'A' * 500, '']}).status_code == 200  # options libres
+    assert answer({'selected': []}).status_code == 409        # déjà verrouillé
+    # chaque forme valide est testée avec un étudiant neuf
+    def fresh_answer(payload):
+        sh = student_headers(join(client, live['session_code']))
+        return client.post('/api/v1/student/answers', headers=sh, json={'answer': payload})
+    assert fresh_answer({'selected': []}).status_code == 200        # liste vide tolérée (rétrocompat)
+    assert fresh_answer({'selected': ['A', 'B']}).status_code == 200
+    assert fresh_answer({'selected': ['🎉', 'A' * 500, '']}).status_code == 200  # options libres
 
 
 def test_nouveaux_types_submit_valide_et_invalide(client):
