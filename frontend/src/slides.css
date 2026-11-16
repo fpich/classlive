@@ -128,6 +128,18 @@
   background-color: rgba(21,128,61,0.12) !important;
   border-color: rgba(21,128,61,0.45) !important;
 }
+/* Callouts non définis dans le snippet Obsidian : on reprend les couleurs
+   par défaut d'Obsidian pour rester identique au rendu du coffre. */
+.slide-content .callout[data-callout="info"] {
+  --callout-color: 68,138,255; --callout-icon: info;
+  background-color: rgba(68,138,255,0.12) !important;
+  border-color: rgba(68,138,255,0.45) !important;
+}
+.slide-content .callout[data-callout="abstract"] {
+  --callout-color: 0,176,255; --callout-icon: clipboard-list;
+  background-color: rgba(0,176,255,0.12) !important;
+  border-color: rgba(0,176,255,0.45) !important;
+}
 /* ===== PALETTE_COULEURS_FIN ===== */
 
 /* ===== ZONE_REPONSE_DEBUT ===== */
