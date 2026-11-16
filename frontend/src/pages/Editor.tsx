@@ -21,6 +21,10 @@ const SLIDE_TEMPLATES: Record<SlideType, string> = {
   I: '# Pin sur image\n\n![image](url)',
 }
 
+// Types de slides sans corrigé à saisir : la bonne réponse est déjà dans le
+// contenu (A : association) ou il n'y a pas de bonne réponse (P : sondage).
+const NO_ANSWER_TYPES = new Set<SlideType>(['A', 'P'])
+
 // Format du corrigé attendu par type de slide (stocké dans le frontmatter
 // `classlive_answer`). Aide affichée dans l'éditeur de corrigé.
 const ANSWER_HELP: Record<SlideType, string> = {
@@ -224,7 +228,7 @@ export default function EditorPage() {
                 <div className="flex gap-2">
                   <Button size="sm" variant={preview ? 'primary' : 'ghost'} onClick={() => setPreview(true)}>Aperçu</Button>
                   <Button size="sm" variant={!preview ? 'primary' : 'ghost'} onClick={() => setPreview(false)}>Markdown</Button>
-                  {slideType(selected) !== 'C' && (
+                  {slideType(selected) !== 'C' && !NO_ANSWER_TYPES.has(slideType(selected) as SlideType) && (
                     <Button size="sm" variant={showAnswer ? 'primary' : 'ghost'} onClick={() => setShowAnswer(!showAnswer)}>
                       Corrigé
                     </Button>
