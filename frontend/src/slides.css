@@ -234,8 +234,10 @@
 
 /* ===== MODERNISATION — cartes, tableaux, blocs ===== */
 /* Callouts : cartes arrondies, CADRE ÉPAIS (2 px, filet gauche 5 px) et OMBRE marquée.
-   Exceptions : [!reponse] (zone d'écriture : bordure fine, pas d'ombre) et [!sommaire] (discret). */
+   Exceptions : [!reponse] (zone d'écriture : bordure fine, pas d'ombre) et [!sommaire] (discret).
+   margin : espacement vertical entre deux callouts successifs (ex. deux [!info] collés). */
 .slide-content .callout:not([data-callout="reponse"]):not([data-callout="sommaire"]) {
+  margin: 10px 0 !important;
   border-radius: 10px !important;
   border-width: 2px !important;
   border-style: solid !important;
