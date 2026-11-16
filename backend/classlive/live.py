@@ -140,6 +140,8 @@ class LiveStore:
                 ('announcement', "TEXT"),
                 ('anonymous', "INTEGER NOT NULL DEFAULT 0"),
                 ('orientation', "TEXT NOT NULL DEFAULT 'paysage'"),
+                ('reactions_enabled', "INTEGER NOT NULL DEFAULT 0"),
+                ('questions_enabled', "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if col not in columns:
                     con.execute(f'ALTER TABLE live_sessions ADD COLUMN {col} {ddl}')
@@ -176,7 +178,8 @@ class LiveStore:
 
     def start(self, group: str, event: str, mode: str = 'live', timing: str = 'none',
               timing_seconds: int | None = None, correction_mode: str = 'show',
-              start_at: str | None = None, anonymous: bool = False) -> dict:
+              start_at: str | None = None, anonymous: bool = False,
+              reactions_enabled: bool = False, questions_enabled: bool = False) -> dict:
         """Démarre une session. mode='live' (formateur pilote) ou 'autonome' (élèves à leur rythme).
         start_at (ISO 8601, futur) planifie la session : status='scheduled' jusqu'à l'activation.
         En mode live, timing='par_question' ajoute un compte à rebours par slide (deadline renouvelée
@@ -243,13 +246,14 @@ class LiveStore:
                     elif mode == 'live' and timing == 'par_question':
                         deadline = datetime.fromtimestamp(time.time() + timing_seconds, timezone.utc).isoformat()
                 status = 'scheduled' if scheduled_at is not None else 'running'
-                con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number,mode,timing,timing_seconds,correction_mode,deadline,anonymous) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                            (lid, code, g.name, parent.name, scheduled_at or now(), status, prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline, int(bool(anonymous))))
+                con.execute('INSERT INTO live_sessions(id,code,group_name,event_name,started_at,status,current_number,mode,timing,timing_seconds,correction_mode,deadline,anonymous,reactions_enabled,questions_enabled) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                            (lid, code, g.name, parent.name, scheduled_at or now(), status, prepared[0][0], mode, timing, timing_seconds, correction_mode, deadline, int(bool(anonymous)), int(bool(reactions_enabled)), int(bool(questions_enabled))))
                 con.executemany('INSERT INTO snapshots(live_id,number,filename,kind,public_content,answer_key) VALUES (?,?,?,?,?,?)',
                                 [(lid, *row) for row in prepared])
             return {'live_id': lid, 'session_code': code, 'group': g.name, 'event': parent.name, 'current_slide': prepared[0][1],
                     'status': status, 'started_at': scheduled_at or now(), 'mode': mode, 'timing': timing,
-                    'timing_seconds': timing_seconds, 'correction_mode': correction_mode, 'anonymous': bool(anonymous)}
+                    'timing_seconds': timing_seconds, 'correction_mode': correction_mode, 'anonymous': bool(anonymous),
+                    'reactions_enabled': bool(reactions_enabled), 'questions_enabled': bool(questions_enabled)}
 
     def state(self, lid: str, include_content: bool = False):
         with self.db() as con:
@@ -264,6 +268,7 @@ class LiveStore:
                       'correction_mode': session['correction_mode'], 'deadline': session['deadline'],
                       'announcement': session['announcement'], 'anonymous': bool(session['anonymous']),
                       'orientation': session['orientation'],
+                      'reactions_enabled': bool(session['reactions_enabled']), 'questions_enabled': bool(session['questions_enabled']),
                       'correction_visible': bool(session['correction_visible']) if current['kind'] in EXERCISES else False}
             if include_content:
                 result['content'] = current['public_content']
@@ -473,6 +478,7 @@ class LiveStore:
                       'position': i + 1, 'total': len(numbers), 'revision': live['revision'],
                       'online': online, 'announcement': live['announcement'],
                       'orientation': live['orientation'],
+                      'reactions_enabled': bool(live['reactions_enabled']), 'questions_enabled': bool(live['questions_enabled']),
                       'content': snap['public_content'], 'finished': bool(finished)}
             if live['mode'] == 'autonome':
                 result['locked'] = locked
@@ -1000,6 +1006,8 @@ class LiveStore:
             live = self._live(con, student['live_id'])
             if live['status'] != 'running':
                 raise ResourceConflict('La session est terminée.')
+            if not live['questions_enabled']:
+                raise ResourceConflict('Les questions sont désactivées par le formateur.')
             count = con.execute('SELECT COUNT(*) AS n FROM questions WHERE participation_id=?', (student['id'],)).fetchone()['n']
             if count >= 50:
                 raise ResourceConflict('Limite de 50 questions par élève atteinte.')
@@ -1056,6 +1064,8 @@ class LiveStore:
             live = self._live(con, student['live_id'])
             if live['status'] != 'running':
                 raise ResourceConflict('La session est terminée.')
+            if not live['reactions_enabled']:
+                raise ResourceConflict('Les réactions sont désactivées par le formateur.')
             stamp = now()
             con.execute('INSERT INTO reactions(live_id,participation_id,emoji,ts) VALUES (?,?,?,?)',
                         (live['id'], student['id'], emoji.strip(), stamp))

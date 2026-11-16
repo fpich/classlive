@@ -13,6 +13,8 @@ export default function LiveSetupPage() {
   const [timingSeconds, setTimingSeconds] = useState('60')
   const [correction, setCorrection] = useState('à_la_fin')
   const [anonymous, setAnonymous] = useState(false)
+  const [reactionsEnabled, setReactionsEnabled] = useState(false)
+  const [questionsEnabled, setQuestionsEnabled] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -28,6 +30,8 @@ export default function LiveSetupPage() {
         timing_seconds: timing !== 'none' ? parseInt(timingSeconds, 10) : undefined,
         correction: mode === 'autonome' ? correction : undefined,
         anonymous,
+        reactions_enabled: reactionsEnabled,
+        questions_enabled: questionsEnabled,
       })
       navigate(`/live-control/${res.live_id}`)
     } catch (err) {
@@ -116,6 +120,26 @@ export default function LiveSetupPage() {
               className="rounded"
             />
             Mode anonyme (masquer les identités dans les résultats)
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={reactionsEnabled}
+              onChange={(e) => setReactionsEnabled(e.target.checked)}
+              className="rounded"
+            />
+            Réactions (emoji des élèves)
+          </label>
+
+          <label className="flex items-center gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              checked={questionsEnabled}
+              onChange={(e) => setQuestionsEnabled(e.target.checked)}
+              className="rounded"
+            />
+            Questions (Q&amp;A des élèves)
           </label>
 
           <Button onClick={handleStart} disabled={loading} className="w-full" size="lg">

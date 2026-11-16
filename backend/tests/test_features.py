@@ -52,6 +52,8 @@ def make_event(client, group='Cours', event='Chapitre 1', kinds=('C', 'Q')):
 def start_live(client, g, e, **payload):
     payload.setdefault('group', g)
     payload.setdefault('title', e)
+    payload.setdefault('reactions_enabled', True)
+    payload.setdefault('questions_enabled', True)
     r = client.post('/api/v1/live/start', json=payload)
     assert r.status_code == 200, r.text
     return r.json()

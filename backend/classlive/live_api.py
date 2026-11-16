@@ -33,6 +33,8 @@ class Begin(BaseModel):
     correction: str | None = None
     start_at: str | None = None  # ISO 8601 futur -> session planifiée (scheduled)
     anonymous: bool = False  # masque les identités dans results / export CSV
+    reactions_enabled: bool = False  # réactions emoji des élèves (désactivées par défaut)
+    questions_enabled: bool = False  # Q&A des élèves (désactivées par défaut)
 
 
 class TextPayload(BaseModel):
@@ -246,7 +248,8 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         try:
             result = store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
                                  timing_seconds=payload.timing_seconds, correction_mode=correction,
-                                 start_at=payload.start_at, anonymous=payload.anonymous)
+                                 start_at=payload.start_at, anonymous=payload.anonymous,
+                                 reactions_enabled=payload.reactions_enabled, questions_enabled=payload.questions_enabled)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         # join_url absolu si public_url configuré (expose.conf), sinon relatif.

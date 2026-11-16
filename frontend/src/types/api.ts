@@ -93,6 +93,8 @@ export interface StartLiveRequest {
   correction?: string
   start_at?: string
   anonymous?: boolean
+  reactions_enabled?: boolean
+  questions_enabled?: boolean
 }
 
 export interface StartLiveResponse {
@@ -109,6 +111,8 @@ export interface StartLiveResponse {
   correction_mode: CorrectionMode
   anonymous: boolean
   join_url: string
+  reactions_enabled: boolean
+  questions_enabled: boolean
 }
 
 export interface LiveState {
@@ -131,6 +135,8 @@ export interface LiveState {
   anonymous: boolean
   orientation: 'paysage' | 'portrait'
   correction_visible: boolean
+  reactions_enabled: boolean
+  questions_enabled: boolean
   content?: string
   correction?: unknown
 }
@@ -150,6 +156,8 @@ export interface StudentState {
   online: number
   announcement: string | null
   orientation: 'paysage' | 'portrait'
+  reactions_enabled: boolean
+  questions_enabled: boolean
   content: string
   finished: boolean
   locked?: boolean

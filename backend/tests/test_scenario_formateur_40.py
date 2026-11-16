@@ -105,7 +105,7 @@ def make_live(client, trainer, group, event, slides, **live_kwargs):
     for title, kind, content in slides:
         add_slide(client, trainer, base, title, kind, content)
     live = req(client, 'POST', '/api/v1/live/start', token=trainer,
-               json={'group': g, 'title': e, **live_kwargs}).json()
+               json={'group': g, 'title': e, 'reactions_enabled': True, 'questions_enabled': True, **live_kwargs}).json()
     return {'g': g, 'e': e, 'base': base, **live}
 
 
@@ -191,7 +191,7 @@ def answer_for(kind, i):
 def scenario_cours_40(client, trainer):
     g, e, base, slides = build_course(client, trainer)
     live = req(client, 'POST', '/api/v1/live/start', token=trainer,
-               json={'group': g, 'title': e}).json()
+               json={'group': g, 'title': e, 'reactions_enabled': True, 'questions_enabled': True}).json()
     lid, code = live['live_id'], live['session_code']
     print(f'[1] Live démarré : {lid} (code {code})')
 

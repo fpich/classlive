@@ -121,11 +121,13 @@ export default function StudentLivePage() {
         {current.announcement && (
           <span className="text-sm bg-yellow-100 text-yellow-800 px-2 py-1 rounded">📢 {current.announcement}</span>
         )}
-        <div className="flex gap-1">
-          {EMOJIS.map((e) => (
-            <button key={e} onClick={() => handleReaction(e)} className="text-xl hover:scale-125 transition-transform">{e}</button>
-          ))}
-        </div>
+        {current.reactions_enabled && (
+          <div className="flex gap-1">
+            {EMOJIS.map((e) => (
+              <button key={e} onClick={() => handleReaction(e)} className="text-xl hover:scale-125 transition-transform">{e}</button>
+            ))}
+          </div>
+        )}
       </header>
 
       {error && <div className="mx-4 mt-2 p-2 bg-red-50 text-red-700 rounded text-sm flex justify-between">{error}<button onClick={() => setError('')}>&times;</button></div>}
@@ -197,6 +199,7 @@ export default function StudentLivePage() {
         )}
 
         {/* Q&A */}
+        {current.questions_enabled && (
         <Card>
           <button onClick={() => setShowQA(!showQA)} className="flex items-center justify-between w-full text-left">
             <span className="font-medium">Questions ({myQuestions.length})</span>
@@ -217,6 +220,7 @@ export default function StudentLivePage() {
             </div>
           )}
         </Card>
+        )}
       </main>
     </div>
   )
