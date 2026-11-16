@@ -1,0 +1,347 @@
+/* =====================================================================
+   MISE EN FORME DES SLIDES CLASSLIVE
+   Fichier : frontend/src/slides.css
+   - Adapté du snippet Obsidian « mise-en-forme-dyslexie.css »
+   - Sélecteurs Obsidian (.markdown-preview-view, .markdown-rendered)
+     remplacés par .slide-content (conteneur du rendu Markdown de l'app).
+   - Les callouts Obsidian (> [!type]) sont rendus par le composant
+     Markdown.tsx avec la classe data-callout="type".
+   ===================================================================== */
+
+/* ===== FILET DE SÉCURITÉ — sélecteurs universels ===== */
+.slide-content {
+  font-family: "Andika", Verdana, "DejaVu Sans", sans-serif !important;
+  background-color: #ffffff !important;
+  background: #ffffff !important;
+  color: #1f2937 !important;
+  font-size: 17px !important;
+  line-height: 1.75 !important;
+  letter-spacing: 0.02em !important;
+  word-spacing: 0.06em !important;
+}
+
+/* ===== PALETTE_COULEURS_DEBUT ===== */
+/* Palette harmonisée — identique en cours, TP et QCM. Fond + bordure explicites
+   en !important : une simple variable --callout-color est écrasée par le thème. */
+.slide-content .callout[data-callout="fiche"] {
+  --callout-color: 30,64,175; --callout-icon: id-card;
+  background-color: rgba(30,64,175,0.12) !important;
+  border-color: rgba(30,64,175,0.45) !important;
+}
+.slide-content .callout[data-callout="sommaire"] {
+  --callout-color: 71,85,105; --callout-icon: list;
+  background-color: rgba(71,85,105,0.12) !important;
+  border-color: rgba(71,85,105,0.45) !important;
+}
+.slide-content .callout[data-callout="objectif"] {
+  --callout-color: 13,148,136; --callout-icon: target;
+  background-color: rgba(13,148,136,0.12) !important;
+  border-color: rgba(13,148,136,0.45) !important;
+}
+.slide-content .callout[data-callout="definition"] {
+  --callout-color: 46,108,219; --callout-icon: book-open;
+  background-color: rgba(46,108,219,0.12) !important;
+  border-color: rgba(46,108,219,0.45) !important;
+}
+.slide-content .callout[data-callout="exemple"] {
+  --callout-color: 139,92,246; --callout-icon: flask-conical;
+  background-color: rgba(139,92,246,0.12) !important;
+  border-color: rgba(139,92,246,0.45) !important;
+}
+.slide-content .callout[data-callout="idee"] {
+  --callout-color: 219,39,119; --callout-icon: lightbulb;
+  background-color: rgba(219,39,119,0.12) !important;
+  border-color: rgba(219,39,119,0.45) !important;
+}
+.slide-content .callout[data-callout="retenir"] {
+  --callout-color: 31,122,51; --callout-icon: star;
+  background-color: rgba(31,122,51,0.12) !important;
+  border-color: rgba(31,122,51,0.45) !important;
+}
+.slide-content .callout[data-callout="activite"] {
+  --callout-color: 217,119,6; --callout-icon: pencil;
+  background-color: rgba(217,119,6,0.12) !important;
+  border-color: rgba(217,119,6,0.45) !important;
+}
+.slide-content .callout[data-callout="consigne"] {
+  --callout-color: 79,70,229; --callout-icon: clipboard-list;
+  background-color: rgba(79,70,229,0.12) !important;
+  border-color: rgba(79,70,229,0.45) !important;
+}
+.slide-content .callout[data-callout="tip"] {
+  --callout-color: 8,145,178; --callout-icon: info;
+  background-color: rgba(8,145,178,0.12) !important;
+  border-color: rgba(8,145,178,0.45) !important;
+}
+.slide-content .callout[data-callout="warning"] {
+  --callout-color: 220,38,38; --callout-icon: alert-triangle;
+  background-color: rgba(220,38,38,0.12) !important;
+  border-color: rgba(220,38,38,0.45) !important;
+}
+.slide-content .callout[data-callout="synthese"] {
+  --callout-color: 162,28,175; --callout-icon: brain;
+  background-color: rgba(162,28,175,0.12) !important;
+  border-color: rgba(162,28,175,0.45) !important;
+}
+.slide-content .callout[data-callout="question"] {
+  --callout-color: 190,18,60; --callout-icon: help-circle;
+  background-color: rgba(190,18,60,0.12) !important;
+  border-color: rgba(190,18,60,0.45) !important;
+}
+.slide-content .callout[data-callout="temps"] {
+  --callout-color: 71,85,105; --callout-icon: clock;
+  background-color: rgba(71,85,105,0.12) !important;
+  border-color: rgba(71,85,105,0.45) !important;
+}
+.slide-content .callout[data-callout="rappel"] {
+  --callout-color: 2,132,199; --callout-icon: repeat;
+  background-color: rgba(2,132,199,0.12) !important;
+  border-color: rgba(2,132,199,0.45) !important;
+}
+.slide-content .callout[data-callout="clefs"] {
+  --callout-color: 22,163,74; --callout-icon: key;
+  background-color: rgba(22,163,74,0.12) !important;
+  border-color: rgba(22,163,74,0.45) !important;
+}
+.slide-content .callout[data-callout="piege"] {
+  --callout-color: 234,88,12; --callout-icon: zap;
+  background-color: rgba(234,88,12,0.12) !important;
+  border-color: rgba(234,88,12,0.45) !important;
+}
+.slide-content .callout[data-callout="metier"] {
+  --callout-color: 124,58,237; --callout-icon: briefcase;
+  background-color: rgba(124,58,237,0.12) !important;
+  border-color: rgba(124,58,237,0.45) !important;
+}
+.slide-content .callout[data-callout="prerequis"] {
+  --callout-color: 100,116,139; --callout-icon: link;
+  background-color: rgba(100,116,139,0.12) !important;
+  border-color: rgba(100,116,139,0.45) !important;
+}
+.slide-content .callout[data-callout="prérequis"] {
+  --callout-color: 100,116,139; --callout-icon: link;
+  background-color: rgba(100,116,139,0.12) !important;
+  border-color: rgba(100,116,139,0.45) !important;
+}
+.slide-content .callout[data-callout="correction"] {
+  --callout-color: 21,128,61; --callout-icon: circle-check;
+  background-color: rgba(21,128,61,0.12) !important;
+  border-color: rgba(21,128,61,0.45) !important;
+}
+/* ===== PALETTE_COULEURS_FIN ===== */
+
+/* ===== ZONE_REPONSE_DEBUT ===== */
+/* Zone de réponse : cadrillage blanc type copie — TOUJOURS blanche,
+   carreaux 5 mm, hauteur 60 mm (12 carreaux). */
+.slide-content .callout[data-callout="reponse"] {
+  --callout-color: 255,255,255; --callout-icon: none;
+  min-height: 60mm !important; margin: 6px 0 12px !important;
+  background: #fff !important;
+  /* Vraie feuille de copie (Séyès) : carreaux 5 mm, ligne principale tous les 25 mm, marge rouge à 20 mm */
+  background-image:
+    linear-gradient(to right, transparent 0, transparent 20mm, rgba(220, 38, 38, 0.45) 20mm, rgba(220, 38, 38, 0.45) calc(20mm + 1px), transparent calc(20mm + 1px)),
+    repeating-linear-gradient(to bottom, transparent 0, transparent calc(25mm - 1px), #9ca3af calc(25mm - 1px), #9ca3af 25mm),
+    repeating-linear-gradient(to bottom, transparent 0, transparent calc(5mm - 1px), #d4d4d4 calc(5mm - 1px), #d4d4d4 5mm),
+    repeating-linear-gradient(to right, transparent 0, transparent calc(5mm - 1px), #e5e5e5 calc(5mm - 1px), #e5e5e5 5mm) !important;
+  border: 1px solid #b5b5b5 !important; border-left: 1px solid #b5b5b5 !important;
+  box-shadow: none !important;
+}
+.slide-content .callout[data-callout="reponse"] .callout-icon,
+.slide-content .callout[data-callout="reponse"] .callout-title { display: none !important; }
+/* ===== ZONE_REPONSE_FIN ===== */
+
+/* ===== POLICY TYPOGRAPHIQUE DYSLEXIE — Andika (gratuite, SIL), secours Verdana ===== */
+.slide-content {
+  font-family: "Andika", Verdana, "DejaVu Sans", sans-serif !important;
+  font-size: 17px !important;
+  line-height: 1.75 !important;
+  letter-spacing: 0.02em !important;
+  word-spacing: 0.06em !important;
+}
+
+/* Blocs de texte JUSTIFIÉS — choix explicite du demandeur.
+   Les LISTES restent alignées à gauche, et les lignes restent courtes. */
+.slide-content p {
+  text-align: justify !important;
+  text-align-last: left !important;
+  hyphens: auto !important;
+  -webkit-hyphens: auto !important;
+  max-width: 78ch;
+  margin-bottom: 0.7em;
+}
+.slide-content li {
+  text-align: left !important;
+  max-width: 78ch;
+  margin-bottom: 0.7em;
+  margin-top: 0.25em;
+}
+/* L'italique fatigue la lecture dyslexique : remplacé par du gras */
+.slide-content em {
+  font-style: normal !important;
+  font-weight: 600 !important;
+}
+.slide-content strong { font-weight: 700 !important; }
+/* Liens : couleur vive, toujours soulignés */
+.slide-content a {
+  color: #2563eb !important;
+  text-decoration: underline !important;
+  text-underline-offset: 2px;
+}
+.slide-content a:hover { color: #1d4ed8 !important; }
+
+/* ===== HIÉRARCHIE DES TITRES ===== */
+.slide-content h1 {
+  font-size: 2em !important; font-weight: 800 !important; line-height: 1.25 !important;
+  letter-spacing: 0.01em !important; margin: 0.4em 0 0.6em 0 !important; padding-bottom: 0.25em !important;
+  border-bottom: 3px solid currentColor !important;
+}
+.slide-content h1::before { content: none !important; }
+.slide-content h2 {
+  font-size: 1.55em !important; font-weight: 700 !important; color: #111827 !important;
+  line-height: 1.3 !important; margin: 1.4em 0 0.6em 0 !important;
+  border-left: 6px solid #6366f1 !important; border-radius: 0 6px 6px 0 !important; padding-left: 12px !important;
+}
+.slide-content h2::before { content: none !important; }
+.slide-content h3 {
+  font-size: 1.25em !important; font-weight: 700 !important; color: #374151 !important;
+  line-height: 1.35 !important; margin: 1.1em 0 0.4em 0 !important;
+}
+.slide-content h3::before { content: "▸ "; color: #6366f1 !important; }
+.slide-content h4 {
+  font-size: 1.1em !important; font-weight: 600 !important; color: #4b5563 !important; margin: 1em 0 0.3em 0 !important;
+}
+.slide-content h4::before { content: none !important; }
+
+/* Code, tableaux, surlignage lisibles */
+.slide-content code { font-size: 0.95em !important; }
+.slide-content pre { font-size: 15px !important; line-height: 1.6 !important; }
+.slide-content th { font-weight: 700 !important; }
+.slide-content mark {
+  background: #fef9c3 !important; color: inherit !important; border-radius: 3px !important; padding: 0 2px !important;
+}
+
+/* ===== MODERNISATION — cartes, tableaux, blocs ===== */
+/* Callouts : cartes arrondies, CADRE ÉPAIS (2 px, filet gauche 5 px) et OMBRE marquée.
+   Exceptions : [!reponse] (zone d'écriture : bordure fine, pas d'ombre) et [!sommaire] (discret). */
+.slide-content .callout:not([data-callout="reponse"]):not([data-callout="sommaire"]) {
+  border-radius: 10px !important;
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-left-width: 5px !important;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.14) !important;
+  transition: box-shadow 0.15s ease !important;
+}
+.slide-content .callout:not([data-callout="reponse"]):not([data-callout="sommaire"]):hover {
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.20) !important;
+}
+/* La fiche référentiel = carte d'identité du document */
+.slide-content .callout[data-callout="fiche"] {
+  border-radius: 12px !important;
+  box-shadow: 0 2px 8px rgba(30, 64, 175, 0.15) !important;
+  border-width: 1px !important; border-style: solid !important;
+}
+/* Sommaire discret */
+.slide-content .callout[data-callout="sommaire"] { border-radius: 10px !important; background-color: #f8fafc !important; }
+/* Tableaux modernes : en-tête gris, zébra, bordures fines */
+.slide-content table { border-collapse: collapse !important; width: 100%; }
+.slide-content th {
+  background: #f1f5f9 !important; border: 1px solid #e2e8f0 !important; padding: 8px 12px !important;
+}
+.slide-content td { border: 1px solid #e2e8f0 !important; padding: 8px 12px !important; }
+.slide-content tbody tr:nth-child(even) { background: #f8fafc !important; }
+/* Blocs de code : carte claire arrondie */
+.slide-content pre {
+  background: #f8fafc !important; border: 1px solid #e2e8f0 !important; border-radius: 8px !important; padding: 12px !important;
+}
+
+/* ===== BLOC DE CODE FORMALISÉ [!code] ===== */
+.slide-content .callout[data-callout="code"] {
+  --callout-color: 51,65,85; --callout-icon: code;
+  background-color: #f8fafc !important;
+  border: 3px solid #334155 !important;
+  border-left: 6px solid #334155 !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 6px rgba(15,23,42,0.12) !important;
+}
+.slide-content .callout[data-callout="code"] .callout-title {
+  font-weight: 700 !important; color: #1e293b !important;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace !important; font-size: 0.9em !important;
+}
+/* Le bloc de code à l'intérieur du callout : fond blanc, cadre fin (pas de double cadre) */
+.slide-content .callout[data-callout="code"] pre {
+  background: #ffffff !important; border: 1px solid #cbd5e1 !important; border-radius: 6px !important;
+  margin: 4px 0 6px 0 !important; padding: 10px !important;
+}
+/* Coloration syntaxique : filet latéral de couleur par langage */
+.slide-content pre[class*="language-java"] { border-left: 5px solid #b45309 !important; }
+.slide-content pre[class*="language-rust"] { border-left: 5px solid #dc2626 !important; }
+.slide-content pre[class*="language-bash"],
+.slide-content pre[class*="language-shell"],
+.slide-content pre[class*="language-sh"],
+.slide-content pre[class*="language-console"] { border-left: 5px solid #16a34a !important; }
+.slide-content pre[class*="language-powershell"],
+.slide-content pre[class*="language-ps1"] { border-left: 5px solid #2563eb !important; }
+.slide-content pre[class*="language-sql"] { border-left: 5px solid #0891b2 !important; }
+.slide-content pre[class*="language-python"] { border-left: 5px solid #7c3aed !important; }
+/* Tokens Prism : fond toujours clair */
+.slide-content pre[class*="language-"] code { background: transparent !important; color: #1f2937 !important; }
+.slide-content pre[class*="language-"] .token.comment { color: #64748b !important; }
+.slide-content pre[class*="language-"] .token.keyword { color: #7c3aed !important; font-weight: 700 !important; }
+.slide-content pre[class*="language-"] .token.string { color: #be185d !important; }
+.slide-content pre[class*="language-"] .token.number { color: #b45309 !important; }
+/* ===== FIN BLOC [!code] ===== */
+
+/* Schémas Mermaid : carte blanche encadrée */
+.slide-content pre.mermaid, .slide-content .mermaid {
+  background: #ffffff !important; border: 1px solid #e2e8f0 !important; border-radius: 10px !important;
+  box-shadow: 0 1px 3px rgba(15,23,42,0.06) !important; padding: 10px !important;
+}
+/* Citations */
+.slide-content blockquote {
+  border-left: 4px solid #94a3b8 !important; background: #f8fafc !important; border-radius: 0 8px 8px 0 !important; padding: 8px 14px !important;
+}
+/* Images et figures : arrondies, ombre légère */
+.slide-content img,
+.slide-content figure {
+  border-radius: 10px !important; box-shadow: 0 2px 8px rgba(15,23,42,0.10) !important;
+}
+/* Cases à cocher : plus visibles */
+.slide-content input[type="checkbox"] {
+  accent-color: #4f46e5 !important; width: 1.1em !important; height: 1.1em !important;
+}
+/* Séparateurs sobres */
+.slide-content hr {
+  border: none !important; height: 2px !important; background: #e2e8f0 !important; margin: 2em 0 !important;
+}
+/* La zone de réponse [!reponse] reste TOUJOURS blanche pure.
+   /!\ ATTENTION : utiliser background-COLOR (pas le shorthand "background") sinon
+   background-image (la grille de copie) est remis à zéro et la grille disparaît. /!\ */
+.slide-content .callout[data-callout="reponse"] {
+  background-color: #ffffff !important;
+}
+
+/* ===== RÈGLES DE COULEUR DANS LE TEXTE (palette sémantique unique) =====
+   - **gras**        -> ambre #b45309  = notion clé / terme important
+   - `code`          -> rose #be185d sur fond #fdf2f8 = commande, valeur technique, adresse IP...
+   - ==surligné==    -> fond jaune #fef9c3 = point à retenir absolument
+   - [[lien]]        -> bleu #2563eb souligné = référence / navigation
+   - titres H2/H3    -> gris foncé #111827 / #374151 = structure du cours */
+.slide-content strong {
+  color: #b45309 !important;
+}
+.slide-content code {
+  color: #be185d !important;
+  background: #fdf2f8 !important;
+  border-radius: 4px !important;
+  padding: 1px 5px !important;
+}
+/* Activité attendue de l'étudiant = JAUNE vif :
+   - bloc [!consigne] en jaune #fef9c3, bordure #eab308 */
+.slide-content .callout[data-callout="consigne"] {
+  background-color: #fef9c3 !important;
+  border-color: #eab308 !important;
+  border-left: 6px solid #eab308 !important;
+}
+.slide-content .callout[data-callout="consigne"] .callout-title { color: #a16207 !important; }
+/* ===== FIN RÈGLES DE COULEUR ===== */
+/* ===== FIN POLICY TYPO ===== */
