@@ -82,7 +82,7 @@ echo ""
 
 # Tuer une ancienne instance sur 8080 si présente
 if port_in_use 8080; then
-  OLD=$(ss -tlnp 2>/dev/null | grep ':8080' | grep -oP 'pid=\K[0-9]+' | head -1)
+  OLD=$(sudo ss -tlnp 2>/dev/null | grep ':8080' | grep -oP 'pid=\K[0-9]+' | head -1)
   [ -n "$OLD" ] && sudo kill "$OLD" 2>/dev/null
   sleep 2
 fi
