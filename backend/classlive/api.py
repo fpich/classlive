@@ -24,6 +24,7 @@ from classlive.slides import MEDIA_TYPES, SLIDE_RE, SlideStorage
 from classlive.navigation import SlideNavigator
 from classlive.live import LiveStore
 from classlive.live_api import install_live_api
+from classlive.trainer_auth import create_trainer_auth, TrainerAuth
 
 logger = logging.getLogger("classlive")
 
@@ -129,7 +130,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         logger.info("%s %s -> %d (%.0f ms)", request.method, request.url.path, response.status_code, duration * 1000)
         return response
 
-    auth = install_live_api(app, cfg, live)
+    # Initialisation de l'authentification persistante des formateurs
+    trainer_auth: TrainerAuth | None = None
+    try:
+        trainer_auth = create_trainer_auth(cfg.workdir)
+        logger.info("Authentification persistante des formateurs activée (trainers.db)")
+    except Exception as e:
+        logger.warning("Impossible d'initialiser l'auth persistante, bascule sur légacy: %s", e)
+        trainer_auth = None
+    
+    auth = install_live_api(app, cfg, live, trainer_auth)
 
     @app.exception_handler(ValueError)
     async def value_error_handler(request, exc: ValueError):
@@ -174,8 +184,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/v1/public-url", tags=["Système"])
     def public_url():
-        """URL d'exposition LAN configurée (expose.conf), pour le QR code côté frontend."""
-        return {"public_url": cfg.public_url}
+        """URL d'exposition LAN configurée (expose.conf), pour le QR code côté frontend.
+        Si expose.conf est introuvable ou vide, tente de détecter automatiquement l'IP LAN."""
+        from classlive.util import get_public_url_from_configOr_autodetect
+        detected_url = get_public_url_from_configOr_autodetect(cfg.port, 'http', str(cfg.workdir))
+        return {
+            "public_url": cfg.public_url or detected_url,
+            "configured": cfg.public_url is not None,
+            "auto_detected": detected_url if cfg.public_url is None else None
+        }
 
     router = APIRouter(dependencies=[Depends(auth.trainer)])
 
@@ -242,9 +259,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.post("/groups/{group}/import.zip", tags=["Événements"], status_code=200)
     async def import_event_zip(group: str, request: Request):
         """Importe un événement depuis un ZIP produit par export.zip (manifest.json + slides Sxxx_*.md).
-        Le ZIP est envoyé en corps brut (application/zip), sans multipart."""
+        Le ZIP est envoyé en corps brut (application/zip), sans multipart.
+        Utilisation d'un fichier temporaire pour éviter de charger tout le ZIP en mémoire."""
+        import tempfile
+        import os
+        
         limit = cfg.export_max_zip_mb * 1024 * 1024
-        # Refus précoce si l'en-tête annonce un corps trop gros (évite de tout lire en mémoire).
+        # Refus précoce si l'en-tête annonce un corps trop gros
         content_length = request.headers.get("content-length")
         if content_length is not None:
             try:
@@ -252,15 +273,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raise HTTPException(status_code=413, detail=f"ZIP trop volumineux (max {cfg.export_max_zip_mb} Mo).")
             except ValueError:
                 raise HTTPException(status_code=422, detail="En-tête Content-Length invalide.") from None
-        data = await request.body()
-        if not data:
-            raise HTTPException(status_code=422, detail="Fichier ZIP vide.")
-        if len(data) > limit:
-            raise HTTPException(status_code=413, detail=f"ZIP trop volumineux (max {cfg.export_max_zip_mb} Mo).")
+        
+        # Écrire le corps de la requête dans un fichier temporaire par chunks
+        # pour éviter de tout charger en mémoire
+        temp_fd = None
+        temp_path = None
         try:
-            zf = zipfile.ZipFile(io.BytesIO(data))
-        except zipfile.BadZipFile as exc:
-            raise HTTPException(status_code=422, detail=f"ZIP invalide : {exc}") from exc
+            # Créer un fichier temporaire
+            temp_fd, temp_path = tempfile.mkstemp(prefix='classlive_import_', suffix='.zip')
+            
+            # Lire le corps par chunks et écrire dans le fichier temporaire
+            total_size = 0
+            chunk_size = 1024 * 1024  # 1MB chunks
+            async for chunk in request.stream():
+                if not chunk:
+                    break
+                os.write(temp_fd, chunk)
+                total_size += len(chunk)
+                if total_size > limit:
+                    raise HTTPException(status_code=413, detail=f"ZIP trop volumineux (max {cfg.export_max_zip_mb} Mo).")
+            
+            # Vérifier que des données ont été reçues
+            if total_size == 0:
+                raise HTTPException(status_code=422, detail="Fichier ZIP vide.")
+            
+            # Réouvrir le fichier temporaire pour lecture par zipfile
+            os.lseek(temp_fd, 0, os.SEEK_SET)
+            try:
+                zf = zipfile.ZipFile(temp_path, 'r')
+            except zipfile.BadZipFile as exc:
+                raise HTTPException(status_code=422, detail=f"ZIP invalide : {exc}") from exc
+        except Exception:
+            # Fermer et supprimer le fichier temporaire en cas d'erreur
+            if temp_fd is not None:
+                os.close(temp_fd)
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
         with zf:
             # Protection anti zip-bomb : taille décompressée totale plafonnée au même limit.
             total_uncompressed = sum(info.file_size for info in zf.infolist() if not info.is_dir())
@@ -300,6 +349,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             for name in slides_infos:
                 (parent / name).write_text(contents[name], encoding="utf-8")
                 written.append(name)
+        
+        # Nettoyer le fichier temporaire
+        try:
+            if temp_fd is not None:
+                os.close(temp_fd)
+            if temp_path and os.path.exists(temp_path):
+                os.unlink(temp_path)
+        except Exception as cleanup_err:
+            logger.warning(f"Erreur lors du nettoyage du fichier temporaire : {cleanup_err}")
+        
         live.audit("formateur", "import_zip", f"{created['group']}/{created['title']} ({len(written)} slides)")
         logger.info("Import ZIP : %s/%s (%d slides)", created["group"], created["title"], len(written))
         return {"success": True, "group": created["group"], "event": created["title"],

@@ -34,24 +34,45 @@ def prepare_markdown(markdown: str) -> tuple[str, object | None]:
 
     Expected front matter: ---\nclasslive_answer: {selected: [B]}\n---\n# Question
     The entire frontmatter is excluded from student output (no leaking other keys).
+    
+    Supports both \\n and \\r\\n line endings.
     """
-    if not markdown.startswith('---\n'):
+    # Normaliser les fins de ligne pour simplifier le parsing
+    normalized = markdown.replace('\r\n', '\n')
+    
+    # Chercher le début du frontmatter
+    if not normalized.startswith('---\n'):
         return markdown, None
-    header, sep, content = markdown[4:].partition('\n---\n')
-    if not sep:
-        raise ValueError('Frontmatter YAML incomplet.')
+    
+    # Extraire le contenu du frontmatter
     try:
-        data = yaml.safe_load(header) or {}
+        # Trouver la fin du frontmatter
+        end_marker = '\n---'
+        header_end = normalized.find(end_marker, 4)  # Commencer après '---\n'
+        if header_end == -1:
+            raise ValueError('Frontmatter YAML incomplet : marqueur de fin --- introuvable.')
+        
+        header_content = normalized[4:header_end]
+        content = normalized[header_end + len(end_marker):].lstrip('\n')
+        
+        # Parser le YAML
+        data = yaml.safe_load(header_content) or {}
+        if not isinstance(data, dict):
+            raise ValueError('Frontmatter YAML invalide : doit être un objet.')
+        
+        return content, data.get('classlive_answer')
+        
     except yaml.YAMLError as exc:
-        raise ValueError("Frontmatter YAML invalide.") from exc
-    if not isinstance(data, dict):
-        raise ValueError('Frontmatter YAML invalide.')
-    return content, data.get('classlive_answer')
+        raise ValueError(f"Frontmatter YAML invalide : {exc}") from exc
 
 
 
 
 class LiveStore:
+    # Rate limiting pour les soumissions étudiants : max 5 soumissions par 2 secondes par participation
+    SUBMIT_RATE_LIMIT = 5
+    SUBMIT_RATE_WINDOW = 2.0  # secondes
+    
     def __init__(self, db_path: Path, slides: SlideStorage, audit_file: Path | None = None, max_students: int = 300):
         self.path = db_path
         self.slides = slides
@@ -60,6 +81,8 @@ class LiveStore:
         self.audit_file = audit_file
         self.max_students = max_students
         self.online_counter = None  # callable(live_id) -> int, installé par live_api (Hub WS)
+        # Rate limiting des soumissions par participation_id
+        self._submit_timestamps: dict[str, list[float]] = {}
         db_path.parent.mkdir(parents=True, exist_ok=True)
         with self.db() as con:
             con.executescript('''
@@ -155,9 +178,16 @@ class LiveStore:
 
     @contextmanager
     def db(self):
-        con = sqlite3.connect(self.path, timeout=15)
+        uri = f'file:{self.path}?mode=rwc'
+        con = sqlite3.connect(uri, timeout=15, uri=True)
         con.row_factory = sqlite3.Row
+        # Optimisations de performance pour SQLite
+        con.execute('PRAGMA journal_mode=WAL')
+        con.execute('PRAGMA synchronous=NORMAL')
         con.execute('PRAGMA foreign_keys=ON')
+        con.execute('PRAGMA temp_store=MEMORY')
+        con.execute('PRAGMA cache_size=-2000')  # 2MB de cache
+        con.execute('PRAGMA busy_timeout=15000')  # 15 secondes
         try:
             with con:
                 yield con
@@ -259,10 +289,17 @@ class LiveStore:
         with self.db() as con:
             session = self._live(con, lid)
             slides = con.execute('SELECT number,filename,kind,public_content FROM snapshots WHERE live_id=? ORDER BY number', (lid,)).fetchall()
-            current = next(s for s in slides if s['number'] == session['current_number'])
+            try:
+                current = next(s for s in slides if s['number'] == session['current_number'])
+            except StopIteration:
+                raise ResourceNotFound(f'Slide courante introuvable pour la session {lid}')
+            try:
+                position = next(i+1 for i,s in enumerate(slides) if s['number'] == current['number'])
+            except StopIteration:
+                position = 0
             result = {'live_id': lid, 'status': session['status'], 'mode': session['mode'], 'group': session['group_name'], 'event': session['event_name'],
                       'slide': current['filename'], 'slide_type': current['kind'], 'number': current['number'],
-                      'position': next(i+1 for i,s in enumerate(slides) if s['number'] == current['number']),
+                      'position': position,
                       'total': len(slides), 'revision': session['revision'],
                       'timing': session['timing'], 'timing_seconds': session['timing_seconds'],
                       'correction_mode': session['correction_mode'], 'deadline': session['deadline'],
@@ -284,7 +321,10 @@ class LiveStore:
             if session['status'] != 'running':
                 raise ResourceConflict('Session Live terminée.')
             numbers = [r['number'] for r in con.execute('SELECT number FROM snapshots WHERE live_id=? ORDER BY number', (lid,))]
-            i = numbers.index(session['current_number'])
+            try:
+                i = numbers.index(session['current_number'])
+            except ValueError:
+                raise ResourceNotFound(f'Slide courante non trouvée dans la liste pour la session {lid}')
             if direction == 'next':
                 target = numbers[min(i + 1, len(numbers)-1)]
             elif direction == 'previous':
@@ -438,12 +478,19 @@ class LiveStore:
         """En timing par_evenement, termine la session perso à la deadline."""
         if live['mode'] == 'autonome' and live['timing'] == 'par_evenement' and live['deadline']:
             prog = con.execute('SELECT finished_at FROM autonomous_progress WHERE participation_id=?', (pid,)).fetchone()
-            if prog and not prog['finished_at'] and datetime.now(timezone.utc).isoformat() > live['deadline']:
-                snaps = con.execute('SELECT number FROM snapshots WHERE live_id=?', (live['id'],)).fetchall()
-                for s in snaps:
-                    con.execute('INSERT OR IGNORE INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?)',
-                                (pid, s['number'], now(), 'deadline'))
-                con.execute('UPDATE autonomous_progress SET finished_at=? WHERE participation_id=?', (now(), pid))
+            if prog and not prog['finished_at']:
+                try:
+                    deadline_dt = datetime.fromisoformat(live['deadline'])
+                    now_dt = datetime.now(timezone.utc)
+                    if now_dt > deadline_dt:
+                        snaps = con.execute('SELECT number FROM snapshots WHERE live_id=?', (live['id'],)).fetchall()
+                        for s in snaps:
+                            con.execute('INSERT OR IGNORE INTO slide_locks(participation_id,slide_number,locked_at,reason) VALUES (?,?,?,?)',
+                                        (pid, s['number'], now(), 'deadline'))
+                        con.execute('UPDATE autonomous_progress SET finished_at=? WHERE participation_id=?', (now(), pid))
+                except (ValueError, TypeError):
+                    # Si la date est invalide, on ignore (ne pas bloquer la session)
+                    pass
 
     def _student_current_number(self, con, student, live):
         if live['mode'] == 'autonome':
@@ -533,10 +580,13 @@ class LiveStore:
             prog = self._ensure_progress(con, student['id'], live['id'])
             self._check_deadline(con, student['id'], live)
             prog = con.execute('SELECT * FROM autonomous_progress WHERE participation_id=?', (student['id'],)).fetchone()
-            if direction == 'next' and prog['finished_at']:
+            if prog['finished_at']:
                 raise ResourceConflict('Votre session autonome est terminée.')
             numbers = [r['number'] for r in con.execute('SELECT number FROM snapshots WHERE live_id=? ORDER BY number', (live['id'],))]
-            i = numbers.index(prog['current_number'])
+            try:
+                i = numbers.index(prog['current_number'])
+            except ValueError:
+                raise ResourceNotFound(f'Slide courante introuvable pour la participation {student["id"]}')
             current_snap = con.execute('SELECT kind FROM snapshots WHERE live_id=? AND number=?', (live['id'], prog['current_number'])).fetchone()
             if direction == 'next':
                 if current_snap['kind'] in EXERCISES and not self._slide_locked(con, student['id'], prog['current_number']):
@@ -591,15 +641,12 @@ class LiveStore:
     def _validate_answer(kind: str, answer: dict):
         """Validation de forme pour les types F/P/Q/N/L/I.
 
-        Q (rétrocompat) : « selected », s'il est présent, doit être une liste de
-        chaînes — les options restent libres (emoji, longueurs, chaîne vide) ;
-        un dict vide est accepté (réponse « blanche »). P est plus strict :
-        liste non vide d'options de 50 car max, requise."""
-        if kind == 'Q':  # QCM : selected, s'il est présent, est une liste de chaînes (options libres, rétrocompat)
+        Q : selected doit être une liste de chaînes. P est plus strict :
+        liste non vide d'options de 50 car max, requise. Q doit aussi avoir selected non vide."""
+        if kind == 'Q':  # QCM : selected doit être une liste non vide de chaînes (options libres)
             selected = answer.get('selected')
-            if selected is not None and (not isinstance(selected, list)
-                                         or any(not isinstance(o, str) for o in selected)):
-                raise ValueError('QCM : selected doit être une liste de chaînes.')
+            if not isinstance(selected, list) or not selected or any(not isinstance(o, str) for o in selected):
+                raise ValueError('QCM : selected doit être une liste non vide de chaînes.')
         elif kind == 'P':  # sondage : un choix parmi la liste
             selected = answer.get('selected')
             if not isinstance(selected, list) or not selected \
@@ -627,6 +674,16 @@ class LiveStore:
     def submit(self, student, answer: object):
         if not isinstance(answer, dict):
             raise ValueError('La réponse doit être un objet JSON.')
+        
+        # Rate limiting par participation
+        now = time.monotonic()
+        participation_id = student['id']
+        timestamps = [t for t in self._submit_timestamps.get(participation_id, []) if now - t < self.SUBMIT_RATE_WINDOW]
+        if len(timestamps) >= self.SUBMIT_RATE_LIMIT:
+            raise ResourceConflict(f'Trop de soumissions récentes. Veuillez patienter {self.SUBMIT_RATE_WINDOW:.0f} secondes.')
+        timestamps.append(now)
+        self._submit_timestamps[participation_id] = timestamps
+        
         with self.lock, self.db() as con:
             live = self._live(con, student['live_id'])
             if live['status'] != 'running':
@@ -707,18 +764,41 @@ class LiveStore:
             live = self._live(con, lid)
             anon = bool(live['anonymous'])
             students = con.execute('SELECT * FROM participations WHERE live_id=? ORDER BY joined_at,id', (lid,)).fetchall()
+            
+            # Récupérer toutes les soumissions pour cette session en une seule requête
+            submissions = con.execute(
+                "SELECT s.id,s.participation_id,s.slide_number,s.answer_json,s.submitted_at,snap.filename "
+                "FROM submissions s JOIN snapshots snap ON snap.live_id=? AND snap.number=s.slide_number "
+                "ORDER BY s.participation_id, s.slide_number, s.id", (lid,)
+            ).fetchall()
+            
+            # Grouper par participation_id, puis par slide_number pour garder la dernière soumission
+            submissions_by_student = {}
+            for row in submissions:
+                if row['participation_id'] not in submissions_by_student:
+                    submissions_by_student[row['participation_id']] = {}
+                # Pour chaque slide, garder la dernière soumission (max id)
+                if row['slide_number'] not in submissions_by_student[row['participation_id']] or \
+                   row['id'] > submissions_by_student[row['participation_id']][row['slide_number']]['id']:
+                    submissions_by_student[row['participation_id']][row['slide_number']] = row
+            
             data = []
             for student in students:
-                rows = con.execute("SELECT s.id,s.slide_number,s.answer_json,s.submitted_at,snap.filename "
-                    "FROM submissions s JOIN snapshots snap ON snap.live_id=? AND snap.number=s.slide_number "
-                    "WHERE s.participation_id=? ORDER BY s.id",(lid,student['id'])).fetchall()
-                latest = {}
-                for row in rows:
-                    latest[row['slide_number']] = row
-                data.append({'participation_id':student['id'],'nom':'anonyme' if anon else student['nom'],
-                             'prenom':'' if anon else student['prenom'],'answered':len(latest),
-                             'answers':[{'slide':row['filename'],'answer':json.loads(row['answer_json']),
-                                         'submitted_at':row['submitted_at']} for row in latest.values()]})
+                student_submissions = submissions_by_student.get(student['id'], {})
+                answers = []
+                for slide_number, row in student_submissions.items():
+                    answers.append({
+                        'slide': row['filename'],
+                        'answer': json.loads(row['answer_json']),
+                        'submitted_at': row['submitted_at']
+                    })
+                data.append({
+                    'participation_id': student['id'],
+                    'nom': 'anonyme' if anon else student['nom'],
+                    'prenom': '' if anon else student['prenom'],
+                    'answered': len(answers),
+                    'answers': answers
+                })
         return {'live_id':lid,'group':live['group_name'],'event':live['event_name'],
                 'status':live['status'],'started_at':live['started_at'],
                 'ended_at':live['ended_at'],'anonymous':anon,'results':data}
@@ -738,33 +818,53 @@ class LiveStore:
                                     (lid,)).fetchall()
             if not all_slides:
                 snapshots = [s for s in snapshots if s['number'] == live['current_number']]
+            
+            # Récupérer toutes les soumissions pour les slides concernées en une seule requête
+            if snapshots:
+                slide_numbers = tuple(s['number'] for s in snapshots)
+                if len(slide_numbers) == 1:
+                    where_clause = 's.slide_number = ?'
+                    params = (slide_numbers[0],)
+                else:
+                    where_clause = f's.slide_number IN ({', '.join(['?'] * len(slide_numbers))})'
+                    params = slide_numbers
+                
+                rows = con.execute(
+                    f'SELECT s.slide_number, s.answer_json FROM submissions s '
+                    f'JOIN participations p ON p.id=s.participation_id '
+                    f'WHERE p.live_id=? AND {where_clause}',
+                    (lid,) + params
+                ).fetchall()
+                
+                # Grouper les réponses par slide_number
+                answers_by_slide = {s['number']: [] for s in snapshots}
+                for row in rows:
+                    answers_by_slide[row['slide_number']].append(json.loads(row['answer_json']))
+            else:
+                answers_by_slide = {}
+            
             slides_stats = []
             for snap in snapshots:
-                rows = con.execute(
-                    'SELECT s.answer_json FROM submissions s JOIN participations p ON p.id=s.participation_id '
-                    'WHERE p.live_id=? AND s.slide_number=?', (lid, snap['number'])).fetchall()
+                answers = answers_by_slide.get(snap['number'], [])
                 entry = {'number': snap['number'], 'slide': snap['filename'], 'slide_type': snap['kind'],
-                         'answered': len(rows), 'total_students': total_students}
+                         'answered': len(answers), 'total_students': total_students}
                 if snap['kind'] in ('Q', 'P'):
                     options: dict[str, int] = {}
-                    for row in rows:
-                        answer = json.loads(row['answer_json'])
+                    for answer in answers:
                         if isinstance(answer, dict):
                             for opt in answer.get('selected', []):
                                 options[opt] = options.get(opt, 0) + 1
                     entry['options'] = options
                 elif snap['kind'] == 'N':
                     words: dict[str, int] = {}
-                    for row in rows:
-                        answer = json.loads(row['answer_json'])
+                    for answer in answers:
                         if isinstance(answer, dict):
                             for w in answer.get('words', []):
                                 words[w] = words.get(w, 0) + 1
                     entry['words'] = words
                 elif snap['kind'] == 'I':
                     pins = []
-                    for row in rows:
-                        answer = json.loads(row['answer_json'])
+                    for answer in answers:
                         if isinstance(answer, dict) and type(answer.get('x')) in (int, float) \
                                 and type(answer.get('y')) in (int, float):
                             pins.append([round(answer['x'], 3), round(answer['y'], 3)])
@@ -774,8 +874,7 @@ class LiveStore:
                                            'y': round(sum(p[1] for p in pins) / len(pins), 3)}
                 elif snap['kind'] == 'L':
                     values: dict[str, int] = {}
-                    for row in rows:
-                        answer = json.loads(row['answer_json'])
+                    for answer in answers:
                         if isinstance(answer, dict) and type(answer.get('value')) is int:
                             key = str(answer['value'])
                             values[key] = values.get(key, 0) + 1

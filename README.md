@@ -92,6 +92,63 @@ Lance les tests pytest, le parcours curl sur serveur éphémère, puis 30 étudi
 
 HTTP et WebSocket ne chiffrent ni les mots de passe ni les jetons : **réserver le service au LAN de confiance** (pare-feu/VLAN) et ne pas l'exposer sur Internet. Les noms, prénoms et réponses sont des données personnelles : informer les étudiants, protéger les sauvegardes et définir une politique de conservation.
 
+### Activer HTTPS avec un reverse proxy
+
+Pour protéger les communications, mettre ClassLive derrière un proxy TLS. Exemple avec **Caddy** (installation simple) :
+
+1. Installer Caddy ([guide officiel](https://caddyserver.com/docs/install)) :
+   ```bash
+   sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https
+   curl -1sL https://dl.cloudsmith.io/public/caddy/stable/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+   curl -1sL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+   sudo apt update && sudo apt install -y caddy
+   ```
+
+2. Configurer Caddy dans `/etc/caddy/Caddyfile`:
+   ```
+   classlive.example.com {
+       reverse_proxy localhost:8080
+   }
+   ```
+
+3. Redémarrer Caddy : `sudo systemctl restart caddy`
+
+4. Configurer ClassLive pour servir `https://classlive.example.com` :
+   - Écrire l'URL complète dans `expose.conf` : `https://classlive.example.com`
+   - Ou Mare la configuration `public_url` dans `backend/config.yml` :
+     ```yaml
+     classlive:
+       server:
+         public_url: https://classlive.example.com
+     ```
+
+Avec **Nginx** :
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name classlive.example.com;
+    
+    ssl_certificate /etc/nginx/ssl/classlive.example.com.crt;
+    ssl_certificate_key /etc/nginx/ssl/classlive.example.com.key;
+    
+    location / {
+        proxy_pass http://localhost:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Upgrade WebSocket
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+**Remarque**. HSTS peut être activé pour forcer HTTPS, et `public_url` sera utilisé comme base pour les URLs du QR code.
+
 ## Licence
 
 Projet interne. Voir les fichiers du dépôt pour plus de détails.

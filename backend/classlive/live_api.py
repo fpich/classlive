@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import secrets
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -17,6 +18,15 @@ from pydantic import BaseModel, Field
 from classlive.config import Settings
 from classlive.live import LiveStore
 from classlive.storage import ResourceNotFound
+from classlive.trainer_auth import (
+    TrainerAuth,
+    InvalidTokenError,
+    ExpiredTokenError,
+    InactiveAccountError,
+    create_trainer_auth,
+)
+
+logger = logging.getLogger("classlive")
 
 
 class Login(BaseModel):
@@ -76,9 +86,10 @@ class ChangePassword(BaseModel):
     new_password: str = Field(min_length=8, max_length=200)
 
 
-class Auth:
-    _LOGIN_WINDOW = 60          # fenêtre de rate limiting (secondes)
-    _LOGIN_MAX = 5              # tentatives max par fenêtre et par IP
+class LegacyAuth:
+    """Ancien système d'auth en mémoire - gardé pour compatibilité jusqu'à migration."""
+    _LOGIN_WINDOW = 60
+    _LOGIN_MAX = 5
 
     def __init__(self, cfg: Settings, store: LiveStore):
         self.cfg = cfg
@@ -164,6 +175,169 @@ class Auth:
         return participant
 
 
+class TrainerAuthWrapper:
+    """Wrapper pour intégrer TrainerAuth avec FastAPI et gérer la compatibilité."""
+    
+    _LOGIN_WINDOW = 60
+    _LOGIN_MAX = 5
+
+    def __init__(self, cfg: Settings, store: LiveStore, trainer_auth: TrainerAuth | None = None):
+        self.cfg = cfg
+        self.store = store
+        self._login_attempts: dict[str, list[float]] = {}
+        self._join_attempts: dict[str, list[float]] = {}
+        self._trainer_auth = trainer_auth
+        self._legacy_auth = LegacyAuth(cfg, store)
+        self._use_persistent = trainer_auth is not None
+    
+    def _check_rate_limit(self, client_ip: str):
+        now = time.monotonic()
+        attempts = [t for t in self._login_attempts.get(client_ip, []) if now - t < self._LOGIN_WINDOW]
+        if len(attempts) >= self._LOGIN_MAX:
+            raise HTTPException(status_code=429, detail='Trop de tentatives de connexion. Réessayez dans une minute.')
+        attempts.append(now)
+        self._login_attempts[client_ip] = attempts
+
+    def _check_join_rate_limit(self, client_ip: str):
+        """Anti brute-force sur le code à 6 chiffres : limite de joins par minute et par IP."""
+        limit = self.cfg.join_rate_limit
+        if limit <= 0:
+            return
+        now = time.monotonic()
+        attempts = [t for t in self._join_attempts.get(client_ip, []) if now - t < self._LOGIN_WINDOW]
+        if len(attempts) >= limit:
+            raise HTTPException(status_code=429, detail='Trop de tentatives de rejoindre. Réessayez dans une minute.')
+        attempts.append(now)
+        self._join_attempts[client_ip] = attempts
+
+    def _migrate_legacy_accounts(self):
+        """Migration des comptes configurés vers la base persistante."""
+        if not self._use_persistent or not self._trainer_auth:
+            return
+        
+        # Vérifier si des comptes existent déjà en base
+        existing = self._trainer_auth.storage.list_trainers()
+        if existing:
+            return  # Déjà migré
+        
+        # Créer le compte principal s'il y a un mot de passe
+        if self.cfg.trainer_password:
+            try:
+                self._trainer_auth.storage.create_trainer(
+                    self.cfg.trainer_username,
+                    self.cfg.trainer_password
+                )
+                self.store.audit(self.cfg.trainer_username, 'migration', 
+                               'Compte formateur migré vers DB persistante')
+            except Exception:
+                pass  # Échec silencieux - on utilise le legacy
+        
+        # Créer les comptes supplémentaires
+        for username, password in self.cfg.trainer_accounts:
+            try:
+                self._trainer_auth.storage.create_trainer(username, password)
+                self.store.audit(username, 'migration', 'Compte migré vers DB persistante')
+            except Exception:
+                pass  # Échec silencieux
+
+    def login(self, payload: Login, client_ip: str = 'unknown'):
+        self._check_rate_limit(client_ip)
+        
+        # Migration initiale si nécessaire
+        self._migrate_legacy_accounts()
+        
+        if self._use_persistent and self._trainer_auth:
+            try:
+                token = self._trainer_auth.login(
+                    payload.username,
+                    payload.password,
+                    ip_address=client_ip
+                )
+                self.store.audit(payload.username, 'login', f'ip={client_ip}')
+                return {
+                    'access_token': token,
+                    'token_type': 'bearer',
+                    'expires_in': int(TrainerAuth.DEFAULT_SESSION_DURATION.total_seconds()),
+                    'role': 'trainer'
+                }
+            except InvalidTokenError:
+                self.store.audit(payload.username, 'login_failed', f'ip={client_ip}')
+                raise HTTPException(status_code=401, detail='Identifiants invalides.')
+            except InactiveAccountError:
+                self.store.audit(payload.username, 'login_failed', f'ip={client_ip} compte_inactif')
+                raise HTTPException(status_code=403, detail='Compte désactivé.')
+        
+        # Fallback vers l'ancien système
+        return self._legacy_auth.login(payload, client_ip)
+
+    def change_password(self, old: str, new: str, client_ip: str = 'unknown', username: str = 'formateur'):
+        """Change le mot de passe avec persistance."""
+        self._check_rate_limit(client_ip)
+        
+        if self._use_persistent and self._trainer_auth:
+            # Trouver le formateur par username
+            trainer = self._trainer_auth.storage.get_trainer_by_username(username)
+            if trainer:
+                try:
+                    result = self._trainer_auth.change_password(
+                        trainer.id,
+                        old,
+                        new
+                    )
+                    if result:
+                        self.store.audit(username, 'change_password', f'ip={client_ip}')
+                        return {'changed': True}
+                    else:
+                        raise HTTPException(status_code=401, detail='Ancien mot de passe invalide.')
+                except InvalidTokenError:
+                    raise HTTPException(status_code=401, detail='Ancien mot de passe invalide.')
+            else:
+                # Essayer le legacy
+                return self._legacy_auth.change_password(old, new, client_ip, username)
+        
+        return self._legacy_auth.change_password(old, new, client_ip, username)
+
+    def valid_trainer(self, token: str) -> bool:
+        if self._use_persistent and self._trainer_auth:
+            try:
+                self._trainer_auth.validate_token(token)
+                return True
+            except (InvalidTokenError, ExpiredTokenError, InactiveAccountError):
+                return False
+        
+        return self._legacy_auth.valid_trainer(token)
+
+    def trainer(self, authorization: str | None=Header(default=None), x_api_key: str | None=Header(default=None)):
+        if self.cfg.api_key and x_api_key and hmac.compare_digest(x_api_key, self.cfg.api_key):
+            return {'role': 'trainer'}
+        token = authorization.partition(' ')[2] if authorization and authorization.lower().startswith('bearer ') else ''
+        if not self.valid_trainer(token):
+            raise HTTPException(status_code=401, detail='Authentification formateur requise.')
+        return {'role': 'trainer'}
+
+    def get_trainer_username(self, token: str) -> str | None:
+        """Récupère le username du formateur à partir du token."""
+        if self._use_persistent and self._trainer_auth:
+            try:
+                trainer, _ = self._trainer_auth.validate_token(token)
+                return trainer.username
+            except (InvalidTokenError, ExpiredTokenError, InactiveAccountError):
+                return None
+        return None
+
+    def invalidate_all_trainer_sessions(self):
+        """Invalide toutes les sessions formateur (appelé lors du redémarrage)."""
+        if self._use_persistent and self._trainer_auth:
+            self._trainer_auth.invalidate_all_sessions()
+
+    def student(self, authorization: str | None=Header(default=None)):
+        token=authorization.partition(' ')[2] if authorization and authorization.lower().startswith('bearer ') else ''
+        participant=self.store.authenticate_student(token)
+        if participant is None:
+            raise HTTPException(status_code=401,detail='Jeton étudiant invalide ou Live terminé.')
+        return participant
+
+
 class Hub:
     def __init__(self):
         self.students: dict[str,set[WebSocket]] = defaultdict(set)
@@ -174,10 +348,23 @@ class Hub:
         targets=list(self.trainers.get(lid,set()))
         if not trainer_only:
             targets+=list(self.students.get(lid,set()))
-        for ws in targets:
+        
+        if not targets:
+            return
+        
+        # Utiliser asyncio.gather pour envoyer les messages en parallèle
+        async def send_to_ws(ws):
             try:
                 await ws.send_json(message)
-            except (WebSocketDisconnect, RuntimeError):
+                return ws, None
+            except (WebSocketDisconnect, RuntimeError) as e:
+                return ws, e
+        
+        results = await asyncio.gather(*[send_to_ws(ws) for ws in targets], return_exceptions=True)
+        
+        # Nettoyer les connexions fermées ou en erreur
+        for ws, error in results:
+            if error is not None:
                 self.trainers[lid].discard(ws)
                 self.students[lid].discard(ws)
                 for pid, w in list(self.by_pid.get(lid, {}).items()):
@@ -218,14 +405,15 @@ def arm_scheduled(store: LiveStore, live_id: str, started_at: str):
     timer.start()
 
 
-def install_live_api(app, cfg: Settings, store: LiveStore):
-    auth=Auth(cfg,store)
+def install_live_api(app, cfg: Settings, store: LiveStore, trainer_auth: TrainerAuth | None = None):
+    auth=TrainerAuthWrapper(cfg, store, trainer_auth)
     hub=Hub()
     # Nombre d'élèves réellement connectés en WebSocket (visible dans student_state).
     store.online_counter=lambda lid: len(hub.by_pid.get(lid,{}))
     app.state.live_store=store
     app.state.live_auth=auth
     app.state.live_hub=hub
+    app.state.trainer_auth=trainer_auth
     trainer_routes=APIRouter(prefix='/api/v1', dependencies=[Depends(auth.trainer)])
     student_routes=APIRouter(prefix='/api/v1')
 
@@ -243,7 +431,7 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return result
 
     @trainer_routes.post('/live/start', tags=['Live formateur'])
-    def start(payload: Begin):
+    async def start(payload: Begin, request: Request):
         correction = payload.correction or ('show' if payload.mode == 'live' else 'à_la_fin')
         try:
             result = store.start(payload.group, payload.title, mode=payload.mode, timing=payload.timing,
@@ -260,7 +448,11 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
             result['join_url'] = ('/app/join?code=' if cfg.frontend_dir else '/join?code=') + result['session_code']
         if result['status'] == 'scheduled':
             arm_scheduled(store, result['live_id'], result['started_at'])
-        store.audit(cfg.trainer_username, 'live_start',
+        # Récupérer le username du formateur si possible
+        auth_header = request.headers.get('authorization', '')
+        token = auth_header.partition(' ')[2] if auth_header.lower().startswith('bearer ') else ''
+        trainer_username = auth.get_trainer_username(token) or cfg.trainer_username
+        store.audit(trainer_username, 'live_start',
                     f"{result['group']}/{result['event']} mode={payload.mode} code={result['session_code']} status={result['status']}")
         return result
 
@@ -303,9 +495,12 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return await set_correction(live_id, False)
 
     @trainer_routes.post('/live/{live_id}/stop',tags=['Live formateur'])
-    async def stop(live_id: str):
+    async def stop(live_id: str, request: Request):
         result=store.stop(live_id)
-        store.audit(cfg.trainer_username, 'live_stop', f"{result['group']}/{result['event']} live_id={live_id}")
+        auth_header = request.headers.get('authorization', '')
+        token = auth_header.partition(' ')[2] if auth_header.lower().startswith('bearer ') else ''
+        trainer_username = auth.get_trainer_username(token) or cfg.trainer_username
+        store.audit(trainer_username, 'live_stop', f"{result['group']}/{result['event']} live_id={live_id}")
         await hub.publish(live_id,{'event':'live_ended','live_id':live_id})
         return result
 
@@ -326,9 +521,12 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         return store.active()
 
     @trainer_routes.delete('/live/{live_id}/students/{participation_id}',tags=['Live formateur'])
-    async def kick_student(live_id: str, participation_id: str):
+    async def kick_student(live_id: str, participation_id: str, request: Request):
         result=store.kick(live_id,participation_id)
-        store.audit(cfg.trainer_username, 'student_kick', f'live_id={live_id} participation_id={participation_id}')
+        auth_header = request.headers.get('authorization', '')
+        token = auth_header.partition(' ')[2] if auth_header.lower().startswith('bearer ') else ''
+        trainer_username = auth.get_trainer_username(token) or cfg.trainer_username
+        store.audit(trainer_username, 'student_kick', f'live_id={live_id} participation_id={participation_id}')
         await hub.publish(live_id,{'event':'student_kicked','participation_id':participation_id})
         return result
 
@@ -545,17 +743,33 @@ def install_live_api(app, cfg: Settings, store: LiveStore):
         store.connected(lid,pid)
         await ws.send_json({'event':'current','current':store.student_state(student)})
         await hub.publish(lid,{'event':'student_connected','participation_id':pid},trainer_only=True)
+        # Timeout d'inactivité : 60 secondes
+        IDLE_TIMEOUT = 60
+        last_activity = time.monotonic()
+        
         try:
             while True:
-                data=await ws.receive_json()
+                try:
+                    data = await asyncio.wait_for(ws.receive_json(), timeout=IDLE_TIMEOUT)
+                    last_activity = time.monotonic()
+                except asyncio.TimeoutError:
+                    # Aucun message reçu dans le timeout, vérifier si la session est toujours active
+                    if time.monotonic() - last_activity > IDLE_TIMEOUT:
+                        logger.debug(f"Timeout idle pour étudiant {pid} dans le live {lid}")
+                        await ws.close(code=1008)
+                        break
+                    continue
+                
                 if isinstance(data,dict) and data.get('event')=='ping':
                     if store.state(lid)['status'] != 'running' or not store.participation_exists(pid):
                         await ws.close(code=1008)
                         break
                     store.ping(lid,pid)
                     await ws.send_json({'event':'pong'})
+                    last_activity = time.monotonic()
                 else:
                     await ws.send_json({'event':'error','detail':'Seul ping est autorisé.'})
+                    last_activity = time.monotonic()
         except WebSocketDisconnect:
             pass
         finally:

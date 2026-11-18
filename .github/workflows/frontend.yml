@@ -1,0 +1,53 @@
+name: Frontend ClassLive
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      working-directory: frontend
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      - name: Lint check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test
+
+  frontend changes:
+    # Job pour détecter les changements frontend et éviter de lancer les tests inutiles
+    runs-on: ubuntu-latest
+    outputs:
+      frontend_changed: ${{ steps.check.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          changes=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep '^frontend/')
+          if [ -n "$changes" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
